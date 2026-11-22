@@ -279,3 +279,21 @@ ul.list button:hover { background: color-mix(in srgb, var(--text) 4%, transparen
 .price-chip.svc { background: color-mix(in srgb, #5e5ce6 16%, transparent); color: #4643c4; }
 .warn.fire { background: color-mix(in srgb, #ff453a 14%, transparent); }
 .link-btn.inline { display: inline; padding: 0; font-weight: 600; }
+
+/* Enforcement sources status */
+.link-button { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; padding: 0; border: 0; background: none; color: var(--accent, #0a84ff); font: inherit; font-size: 14px; cursor: pointer; }
+.link-button:hover { text-decoration: underline; }
+.sources-list li { padding: 10px 0; border-bottom: 1px solid var(--line, rgba(127, 127, 127, 0.2)); line-height: 1.4; }
+.sources-list li:last-child { border-bottom: 0; }
+.status-chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; vertical-align: 1px; }
+.status-chip.ok { background: rgba(52, 199, 89, 0.16); color: #1f8a3c; }
+.status-chip.stale { background: rgba(255, 149, 0, 0.18); color: #b25f00; }
+.status-chip.missing { background: rgba(255, 59, 48, 0.14); color: #c4271d; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .status-chip.ok { color: #4cd964; }
+  :root:not([data-theme="light"]) .status-chip.stale { color: #ffb340; }
+  :root:not([data-theme="light"]) .status-chip.missing { color: #ff6961; }
+}
+:root[data-theme="dark"] .status-chip.ok { color: #4cd964; }
+:root[data-theme="dark"] .status-chip.stale { color: #ffb340; }
+:root[data-theme="dark"] .status-chip.missing { color: #ff6961; }

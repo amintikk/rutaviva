@@ -2,8 +2,12 @@
 
 Priority: the DGT report (complete and current, but road + kilometre only) placed with the exact
 coordinates of the DGT's NAP feed or of OpenStreetMap whenever they describe the same device;
-then OpenStreetMap for what the DGT does not cover (Catalonia, the Basque Country, cities).
+then the Servei Català de Trànsit's own list for Catalonia (where the DGT has no say), and finally
+OpenStreetMap for what no official list covers (the Basque Country, Navarre, cities).
 Each item says how its position was obtained (`pos`): 'exacta' or 'aproximada'.
+
+The DGT report also lists the stretches where it uses mobile radars ("Radar Móvil", km X to km Y):
+they become `movil_zona` zones, which say where checks happen, never where a radar is now.
 """
 from __future__ import annotations
 
@@ -16,7 +20,8 @@ from .pk import PkIndex, Router
 Snap = Callable[[list[tuple[str, list[tuple[float, float]], float | None]]], Awaitable[dict[str, list[list[float]]]]]
 
 LABEL = {'fijo': 'Radar fijo', 'tramo': 'Radar de tramo', 'semaforo': 'Cámara de semáforo en rojo',
-         'cinturon': 'Cámara de cinturón y móvil', 'linea': 'Cámara de línea continua', 'stop': 'Cámara de stop'}
+         'cinturon': 'Cámara de cinturón y móvil', 'linea': 'Cámara de línea continua', 'stop': 'Cámara de stop',
+         'remolque': 'Radar remolque', 'movil_zona': 'Zona de radar móvil'}
 
 
 def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -46,8 +51,11 @@ def _nearest(g: dict[tuple[int, int], list[dict[str, Any]]], lon: float, lat: fl
 
 
 async def build(informe: list[dict[str, Any]], equipos: list[dict[str, Any]], nap: list[dict[str, Any]],
-                osm: dict[str, Any], index: PkIndex, route: Router, snap: Snap) -> tuple[list[dict], list[dict]]:
-    """Returns (points, sections). Points: one per device (sections also get a point at their start)."""
+                osm: dict[str, Any], index: PkIndex, route: Router, snap: Snap,
+                sct: list[dict[str, Any]] | None = None, city: list[dict[str, Any]] | None = None) -> tuple[list[dict], list[dict], dict[str, Any]]:
+    """Returns (points, sections, extra). Points: one per device (sections also get a point at their start).
+    extra['zones']: mobile-radar stretches with both ends placed (still to be drawn along the road);
+    extra['rejected']: SCT lines left out or moved, with the reason; extra['zones_missing']: zones not placed."""
     points: list[dict[str, Any]] = []
     sections: list[dict[str, Any]] = []
     nap_by_road: dict[str, list[dict[str, Any]]] = {}
@@ -170,6 +178,88 @@ async def build(informe: list[dict[str, Any]], equipos: list[dict[str, Any]], na
                        'road': row['road'], 'km': row['km'], 'prov': row['prov'], 'dir': row['dir'],
                        'lon': loc[0], 'lat': loc[1], 'pos': 'exacta' if loc[2] == 'exacto' else 'aproximada'})
 
+    # ---------------------------------------------------------------- Servei Català de Trànsit (Catalonia)
+    rejected: list[str] = []
+
+    async def sct_place(row: dict[str, Any]) -> tuple[tuple[float, float] | None, str]:
+        """Choose among the file's coordinates (as written or with a typo undone) using the road and kilometre:
+        a written position must lie within 15 km of where its PK is (the PK index itself can be a few km off), a repaired one within 2 km. Without a
+        usable coordinate the PK gives an approximate position; without either the line is left out."""
+        cands = row['cands']
+        loc = await index.locate(row['road'], row['km'], route)
+        if loc:
+            best = min(cands, key=lambda c: _km((c[0], c[1]), (loc[0], loc[1])), default=None)
+            if best:
+                d = _km((best[0], best[1]), (loc[0], loc[1]))
+                if d <= (2.0 if best[2] else 15.0):
+                    return (best[0], best[1]), 'exacta'
+                rejected.append(f"{row['raw']}: coordenadas a {d:.0f} km de su PK, situado por PK")
+            else:
+                rejected.append(f"{row['raw']}: coordenadas no válidas, situado por PK")
+            return (loc[0], loc[1]), 'aproximada'
+        written = [c for c in cands if not c[2]]
+        if written:
+            return (written[0][0], written[0][1]), 'exacta'
+        rejected.append(f"{row['raw']}: coordenadas no válidas y PK no localizable, omitido")
+        return None, ''
+
+    async def add_official(base: dict[str, Any], pt: tuple[float, float], end: tuple[float, float] | None) -> None:
+        """A device from a regional or city list: skipped if the same kind is already there, preferred over
+        the same camera in OpenStreetMap; sections are drawn with OSM's geometry or along the road."""
+        kind = base['kind']
+        if any(p['kind'] == kind and _km(pt, (p['lon'], p['lat'])) < (0.03 if kind == 'remolque' else 0.15) for p in points):
+            return
+        if kind != 'remolque':
+            cam = _nearest(cam_grid, pt[0], pt[1], 0.3, used_osm)
+            if cam:
+                used_osm.add(cam['id'])
+                base['maxspeed'] = base.get('maxspeed') or cam.get('maxspeed')
+        if kind == 'tramo':
+            s = osm_section(base.get('road') or '', pt, end)
+            if s:
+                used_sections.add(s['id'])
+                sections.append({**base, 'lines': s['lines'] or [[list(s['from']), list(s['to'])]], 'pos': 'exacta'})
+            elif end:
+                line = (await snap([(base['id'], [pt, end], base.get('len'))])).get(base['id'])
+                if line:
+                    sections.append({**base, 'lines': [line]})
+        points.append({**base, 'lon': pt[0], 'lat': pt[1]})
+
+    for row in sct or []:
+        pt, pos = await sct_place(row)
+        if not pt:
+            continue
+        kind = row['kind']
+        base = {'id': f"sct:{kind}:{road_key(row['road'])}:{row['km']}" + (f"-{row['km2']}" if row.get('km2') is not None else ''),
+                'kind': kind, 'src': 'sct', 'road': row['road'], 'km': row['km'], 'prov': 'Catalunya',
+                'maxspeed': row.get('maxspeed'), 'note': row.get('note', ''), 'pos': pos}
+        end = None
+        if kind == 'tramo':
+            base.update(km2=row['km2'], len=round(abs(row['km2'] - row['km']), 2), dir='positive' if row['km2'] > row['km'] else 'negative')
+            lb = await index.locate(row['road'], row['km2'], route)
+            end = (lb[0], lb[1]) if lb else None
+        await add_official(base, pt, end)
+
+    # City lists with their own coordinates (Madrid).
+    for c in city or []:
+        await add_official({k: v for k, v in c.items() if k not in ('lon', 'lat', 'end')} | {'pos': 'exacta'}, (c['lon'], c['lat']), c.get('end'))
+
+    # ---------------------------------------------------------------- DGT mobile-radar stretches (zones, not positions)
+    zones: list[dict[str, Any]] = []
+    zones_missing = 0
+    for row in informe:
+        if row['kind'] != 'movil' or row.get('km2') is None:
+            continue
+        la = await index.locate(row['road'], row['km'], route)
+        lb = await index.locate(row['road'], row['km2'], route)
+        if not la or not lb:
+            zones_missing += 1
+            continue
+        zones.append({'id': f"dgt:movil:{road_key(row['road'])}:{row['km']}-{row['km2']}", 'kind': 'movil_zona', 'src': 'dgt',
+                      'road': row['road'], 'km': row['km'], 'km2': row['km2'], 'prov': row['prov'], 'dir': row['dir'],
+                      'len': round(abs(row['km2'] - row['km']), 1), 'valid_from': _iso(row.get('date', '')),
+                      'a': (la[0], la[1]), 'b': (lb[0], lb[1])})
+
     # ---------------------------------------------------------------- OpenStreetMap: what the DGT lists do not have
     for s in osm_sections:
         if s['id'] in used_sections:
@@ -195,4 +285,10 @@ async def build(informe: list[dict[str, Any]], equipos: list[dict[str, Any]], na
         points.append({'id': lt['id'], 'kind': 'semaforo', 'src': 'osm', 'lon': lt['lon'], 'lat': lt['lat'], 'pos': 'exacta'})
     for p in points:
         p['label'] = LABEL.get(p['kind'], 'Radar')
-    return points, sections
+    return points, sections, {'zones': zones, 'zones_missing': zones_missing, 'rejected': rejected}
+
+
+def _iso(d: str) -> str:
+    """'03/08/2026' -> '2026-08-03'."""
+    p = d.split('/')
+    return f'{p[2]}-{p[1]}-{p[0]}' if len(p) == 3 else ''

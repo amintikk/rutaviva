@@ -5,7 +5,8 @@ import {
   CircleDot, Clock, CloudRain, Compass, Construction, Euro, ExternalLink, Flag, Fuel, Gauge, Info, Layers, Leaf, LoaderCircle,
   LocateFixed, MapPin, Menu, Minus, Moon, Mountain, Navigation, OctagonX, Plus, PlugZap, Radar, RectangleHorizontal, RefreshCw,
   Route, Search, Share2, ShieldAlert, Signpost, Snowflake, Sun, TrafficCone, TrendingDown, TrendingUp, TriangleAlert, Video, Waypoints,
-  X, Zap, Bike, Cctv, MoveHorizontal, CircleDot as Lights, Flame, Coffee, Ticket, Link, Check, SlidersHorizontal, TreePine, type IconNode,
+  X, Zap, Bike, Cctv, MoveHorizontal, CircleDot as Lights, Flame, Coffee, Ticket, Link, Check, SlidersHorizontal, TreePine, Megaphone,
+  Truck, History, type IconNode,
 } from 'lucide';
 
 export const ICONS = {
@@ -18,6 +19,7 @@ export const ICONS = {
   snow: Snowflake, sun: Sun, cone: TrafficCone, down: TrendingDown, up: TrendingUp, alert: TriangleAlert, video: Video,
   waypoints: Waypoints, x: X, zap: Zap, bike: Bike, cctv: Cctv, section: MoveHorizontal, lights: Lights,
   flame: Flame, coffee: Coffee, ticket: Ticket, link: Link, check: Check, options: SlidersHorizontal, tree: TreePine,
+  megaphone: Megaphone, truck: Truck, history: History,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;
@@ -140,7 +142,7 @@ export async function radarImage(speed: number, kind: string, dark: boolean, rat
     const bx = px - 7 * ratio;
     const by = px - 7 * ratio;
     const br = 6.2 * ratio;
-    const badge = kind === 'tramo' ? '#0a84ff' : kind === 'semaforo' ? '#8e44ad' : '#1c1c1e';
+    const badge = kind === 'tramo' ? '#0a84ff' : kind === 'semaforo' ? '#8e44ad' : kind === 'remolque' ? '#ff9500' : '#1c1c1e';
     ctx.beginPath();
     ctx.arc(bx, by, br, 0, Math.PI * 2);
     ctx.fillStyle = badge;
@@ -148,11 +150,11 @@ export async function radarImage(speed: number, kind: string, dark: boolean, rat
     ctx.lineWidth = 1.4 * ratio;
     ctx.strokeStyle = dark ? '#1c1c1e' : '#ffffff';
     ctx.stroke();
-    await glyph(kind === 'tramo' ? 'section' : kind === 'semaforo' ? 'lights' : 'cctv', bx, by, br * 1.25, '#ffffff', 2.6);
+    await glyph(kind === 'tramo' ? 'section' : kind === 'semaforo' ? 'lights' : kind === 'remolque' ? 'truck' : 'cctv', bx, by, br * 1.25, '#ffffff', 2.6);
   } else {
     const look: Record<string, [string, IconName]> = {
       tramo: ['#0a84ff', 'section'], semaforo: ['#8e44ad', 'lights'], cinturon: ['#0f9d8a', 'cctv'],
-      linea: ['#f08a24', 'minus'], stop: ['#b3261e', 'closed'],
+      linea: ['#f08a24', 'minus'], stop: ['#b3261e', 'closed'], remolque: ['#ff9500', 'truck'],
     };
     const [color, ic] = look[kind] ?? ['#e0201b', 'cctv'];
     ctx.beginPath();

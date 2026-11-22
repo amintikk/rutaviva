@@ -206,7 +206,8 @@ async function toggle(g: Group, on = !active.has(g)): Promise<void> {
 
 // Kinds that can be linked to (?ver=kind:id) and the source that holds them.
 const SHARE_SOURCE: Partial<Record<D.Kind, string>> = {
-  incident: 'incidents', camera: 'cameras', radar: 'radars', stretch: 'invive', motos: 'motos', fuel: 'fuel', ev: 'ev',
+  incident: 'incidents', camera: 'cameras', radar: 'radars', radarzone: 'radar-zones', alert: 'radar-alerts', mobile: 'radar-mobile',
+  stretch: 'invive', motos: 'motos', fuel: 'fuel', ev: 'ev',
   vms: 'vms', zbe: 'zbe', quake: 'quakes', toll: 'tolls', fire: 'fires',
 };
 
@@ -223,6 +224,9 @@ function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, l
     case 'congestion': D.congestion(ctx, p); break;
     case 'camera': D.camera(ctx, p, lon, lat, push); break;
     case 'radar': D.radar(ctx, p, lon, lat); break;
+    case 'radarzone': D.radarZone(ctx, props); break;
+    case 'alert': D.alert(ctx, p, lon, lat); break;
+    case 'mobile': D.mobileZone(ctx, p, lon, lat); break;
     case 'stretch': D.stretch(ctx, props, 'stretch'); break;
     case 'motos': D.stretch(ctx, props, 'motos'); break;
     case 'fuel': D.fuel(ctx, p, lon, lat); break;
@@ -238,7 +242,7 @@ function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, l
   track('detail', { kind });
 }
 
-const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'traffic-lines', 'traffic-dots', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'fire-icon', 'fire-dot', 'toll-booth', 'services-icon', 'radar-sections', 'motos', 'invive', 'motos-ends', 'invive-ends', 'toll-line', 'burnt-fill', 'zbe-fill'];
+const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'traffic-lines', 'traffic-dots', 'ev-live', 'cam-icon', 'alert-icon', 'alert-dot', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'fire-icon', 'fire-dot', 'toll-booth', 'services-icon', 'radar-sections', 'motos', 'invive', 'radar-zones', 'motos-ends', 'invive-ends', 'radar-zones-ends', 'mobile-fill', 'toll-line', 'burnt-fill', 'zbe-fill'];
 map.on('click', (e) => {
   const pad = mobile ? 12 : 6;
   const feats = map.queryRenderedFeatures([[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]], { layers: CLICKABLE.filter((l) => map.getLayer(l)) });
@@ -249,7 +253,8 @@ map.on('click', (e) => {
   const props = { ...(f.properties as Record<string, unknown>) };
   const pt = f.geometry.type === 'Point' ? (f.geometry.coordinates as [number, number]) : [e.lngLat.lng, e.lngLat.lat] as [number, number];
   const kind: D.Kind | null = g === 'traffic' ? (f.source === 'traffic' ? 'congestion' : 'incident') : g === 'cameras' ? 'camera' : g === 'radars'
-    ? (f.source === 'invive' ? 'stretch' : f.source === 'motos' ? 'motos' : 'radar')
+    ? (f.source === 'invive' ? 'stretch' : f.source === 'motos' ? 'motos' : f.source === 'radar-zones' ? 'radarzone' : 'radar')
+    : g === 'mobile' ? (f.source === 'radar-alerts' ? 'alert' : 'mobile')
     : g === 'fuel' ? 'fuel' : g === 'ev' ? 'ev' : g === 'ev-live' ? 'evlive' : g === 'vms' ? 'vms' : g === 'zbe' ? 'zbe' : g === 'quakes' ? 'quake' : g === 'tolls' ? 'toll' : g === 'fires' ? 'fire' : null;
   if (kind === 'radar' && f.source === 'radar-sections') props.kind = 'tramo';
   if (kind) openDetail(kind, props, pt[0], pt[1]);

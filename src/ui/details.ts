@@ -1,8 +1,9 @@
 // Detail views for every kind of map feature, shown in the sheet.
 import type { Map as MlMap } from 'maplibre-gl';
 import {
-  ago, CATS, esc, FUEL_LABEL, FUELS, km, nf, price, SRC, titleCase, when, WHAT,
-  TRAFFIC_STATE, type Camera, type Cat, type Charger, type Congestion, type FC, type Incident, type Panel, type Quake, type Radar, type Station, type Zone,
+  ago, CATS, esc, FUEL_LABEL, FUELS, km, live, nf, price, SRC, titleCase, when, WHAT,
+  TRAFFIC_STATE, type Alert, type Camera, type Cat, type Charger, type Congestion, type FC, type Incident, type MobileZone, type Panel, type Quake, type Radar,
+  type SourceStatus, type Station, type Zone,
 } from '../data.ts';
 import type { Layers } from '../map/layers.ts';
 import { lineChart } from './chart.ts';
@@ -17,7 +18,7 @@ export interface Ctx {
   open: (kind: Kind, props: Record<string, unknown>, lon: number, lat: number, push?: boolean) => void;
   routeTo: (lon: number, lat: number, label: string) => void;
 }
-export type Kind = 'congestion' | 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake' | 'toll' | 'fire';
+export type Kind = 'congestion' | 'incident' | 'camera' | 'radar' | 'radarzone' | 'alert' | 'mobile' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake' | 'toll' | 'fire';
 
 const h = (html: string): HTMLElement => {
   const d = document.createElement('div');
@@ -175,7 +176,26 @@ const RADAR_KIND: Record<string, { title: string; icon: IconName; color: string;
   cinturon: { title: 'Cámara de cinturón y móvil', icon: 'cctv', color: '#0f9d8a', text: 'Cámara de la DGT que detecta a quien circula sin cinturón o usando el móvil al volante.' },
   linea: { title: 'Cámara de línea continua', icon: 'minus', color: '#f08a24', text: 'Detecta los adelantamientos y cambios de carril pisando la línea continua.' },
   stop: { title: 'Cámara de stop', icon: 'closed', color: '#b3261e', text: 'Detecta a quien no se detiene en la señal de stop.' },
+  remolque: { title: 'Radar remolque', icon: 'truck', color: '#ff9500', text: 'Punto donde el Servei Català de Trànsit coloca a veces uno de sus radares remolque. No siempre hay un radar: es una ubicación habitual, no una presencia confirmada.' },
 };
+
+const RADAR_SOURCE: Record<string, string> = {
+  dgt: 'Fuente: listado oficial de la DGT de equipos y tramos de vigilancia.',
+  sct: 'Fuente: Servei Català de Trànsit (Generalitat de Catalunya), listado oficial de radares.',
+  madrid: 'Fuente: Ayuntamiento de Madrid, portal de datos abiertos.',
+  osm: 'Fuente: comunidad de OpenStreetMap. Puede ser de un ayuntamiento, de una comunidad autónoma o no estar en las listas oficiales.',
+};
+
+/** "Válido del 3 de agosto al …" from ISO dates (date or date-time). */
+function validity(from?: string, to?: string): string {
+  const d = (x: string) => new Date(x.length === 10 ? `${x}T12:00:00` : x);
+  const day = (x: string) => d(x).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+  const hm = (x: string) => d(x).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+  if (from && to && from.slice(0, 10) === to.slice(0, 10) && from.length > 10) return `Hoy, ${day(from)}, de ${hm(from)} a ${hm(to)}`;
+  if (from && to) return `Del ${day(from)} al ${day(to)}`;
+  if (from) return `Desde el ${day(from)}`;
+  return '';
+}
 
 export function radar(ctx: Ctx, p: Radar, lon: number, lat: number): void {
   const k = RADAR_KIND[p.kind] ?? RADAR_KIND.fijo!;
@@ -195,12 +215,13 @@ export function radar(ctx: Ctx, p: Radar, lon: number, lat: number): void {
     ${p.prov ? `<p class="muted">${esc(titleCase(p.prov))}</p>` : ''}</div>
     ${p.maxspeed ? `<span class="speed-sign" aria-label="Límite ${p.maxspeed} km/h">${p.maxspeed}</span>` : ''}</div>
     <p class="note">${esc(k.text)}${p.note ? ` ${esc(p.note)}` : ''}</p>
-    ${p.pos === 'aproximada' ? '<p class="warn">Posición aproximada: la DGT lo publica por punto kilométrico y lo hemos situado sobre la carretera (margen habitual de unos cientos de metros).</p>' : ''}
+    ${p.pos === 'aproximada' ? `<p class="warn">Posición aproximada: ${p.src === 'sct' ? 'las coordenadas publicadas no eran válidas y' : 'la DGT lo publica por punto kilométrico y'} lo hemos situado sobre la carretera por su punto kilométrico (margen habitual de unos cientos de metros).</p>` : ''}
     <div class="rows">${tramo && p.len ? row('gauge', `Tramo de <b>${nf.format(p.len)} km</b>`) : ''}
     ${dirText ? row('road', esc(dirText)) : ''}
-    ${row('info', osm ? 'Fuente: comunidad de OpenStreetMap. Puede ser de un ayuntamiento, de una comunidad autónoma o no estar en las listas de la DGT.' : 'Fuente: listado oficial de la DGT de equipos y tramos de vigilancia.')}</div>`);
-  el.append(actions(ctx, lon, lat, `${k.title} ${p.road ?? ''}`, false));
-  ctx.sheet.show(k.title, [p.road, km(p.km), osm ? 'OpenStreetMap' : 'DGT'].filter(Boolean).join(' · '), el);
+    ${row('info', RADAR_SOURCE[p.src ?? 'dgt'] ?? RADAR_SOURCE.dgt!)}</div>`);
+  el.append(actions(ctx, lon, lat, `${k.title} ${p.road ?? ''}`, false), sourcesLink(ctx));
+  const srcLabel = ({ osm: 'OpenStreetMap', sct: 'Servei Català de Trànsit', madrid: 'Ayuntamiento de Madrid' } as Record<string, string>)[p.src ?? ''] ?? 'DGT';
+  ctx.sheet.show(k.title, [p.road, km(p.km), srcLabel].filter(Boolean).join(' · '), el);
 }
 
 export function stretch(ctx: Ctx, p: Record<string, unknown>, kind: 'stretch' | 'motos'): void {
@@ -213,8 +234,117 @@ export function stretch(ctx: Ctx, p: Record<string, unknown>, kind: 'stretch' | 
     <p class="big">${esc(p.road)} <span class="muted">${k1 != null && k2 != null ? `km ${nf.format(k1)} a ${nf.format(k2)}` : esc(km(k1))}</span></p>
     ${p.prov ? `<p class="muted">${esc(titleCase(String(p.prov)))}</p>` : ''}</div></div>
     ${p.ends ? '<p class="warn">No hemos podido trazar este tramo sobre la carretera: los círculos marcan su inicio y su fin.</p>' : ''}
-    <p class="note">${motos ? 'Tramo señalizado con alta siniestralidad de motocicletas: la DGT recomienda extremar la precaución y aumenta la vigilancia.' : 'Tramo donde la DGT intensifica los controles de velocidad, normalmente con radares móviles.'}</p>`);
-  ctx.sheet.show(motos ? 'Tramo de riesgo para motos' : 'Tramo vigilado', String(p.road ?? ''), el);
+    <p class="note">${motos ? 'Tramo señalizado con alta siniestralidad de motocicletas: la DGT recomienda extremar la precaución y aumenta la vigilancia.' : 'Zona de vigilancia: la DGT intensifica aquí los controles de velocidad, normalmente con radares móviles o vehículos camuflados. No indica dónde hay un radar ni si lo hay ahora.'}</p>`);
+  ctx.sheet.show(motos ? 'Tramo de riesgo para motos' : 'Zona de vigilancia', String(p.road ?? ''), el);
+}
+
+/** A stretch where the DGT places mobile radars (its report, "Radar Móvil" from km X to km Y). */
+export function radarZone(ctx: Ctx, p: Record<string, unknown>): void {
+  const color = '#ff6b35';
+  const k1 = p.km as number | undefined;
+  const k2 = p.km2 as number | undefined;
+  const el = h(`<div class="hero">${badge('radar', color)}<div>
+    <p class="kicker" style="color:${color}">Zona de vigilancia con radar móvil</p>
+    <p class="big">${esc(p.road)} <span class="muted">${k1 != null && k2 != null ? `km ${nf.format(Math.min(k1, k2))} a ${nf.format(Math.max(k1, k2))}` : ''}</span></p>
+    ${p.prov ? `<p class="muted">${esc(titleCase(String(p.prov)))}</p>` : ''}</div></div>
+    ${p.ends ? '<p class="warn">No hemos podido trazar este tramo sobre la carretera: los círculos marcan su inicio y su fin.</p>' : ''}
+    <p class="note">La DGT incluye este tramo en su lista de lugares donde controla la velocidad con radares móviles. Es una zona de vigilancia, no la ubicación exacta de un radar: puede haberlo en cualquier punto del tramo, o no haber ninguno hoy.</p>
+    <div class="rows">${p.len ? row('gauge', `Tramo de <b>${nf.format(Number(p.len))} km</b>`) : ''}
+    ${p.valid_from ? row('calendar', `En la lista de la DGT del ${esc(validity(String(p.valid_from)).replace(/^Desde el /, ''))}`) : ''}
+    ${row('info', 'Fuente: informe oficial de cinemómetros de la DGT.')}</div>`);
+  el.append(sourcesLink(ctx));
+  ctx.sheet.show('Zona de radar móvil', String(p.road ?? ''), el);
+}
+
+const ALERT_KIND: Record<string, [string, string]> = {
+  movil: ['Control móvil de velocidad anunciado', 'El panel avisa de un control con radar móvil más adelante.'],
+  tramo: ['Radar de tramo anunciado', 'El panel recuerda que la velocidad se controla en tramo.'],
+  radar: ['Control de velocidad anunciado', 'El panel avisa de que la velocidad está controlada por radar.'],
+};
+
+/** A DGT message sign announcing a speed check: valid while the sign shows it. */
+export function alert(ctx: Ctx, p: Alert, lon: number, lat: number): void {
+  const [title, text] = ALERT_KIND[p.kind] ?? ALERT_KIND.radar!;
+  const color = p.kind === 'movil' ? '#ff9500' : '#e0201b';
+  const lines = (p.lines || '').split('\n').filter(Boolean);
+  const picts = (p.picts || '').split(',').filter(Boolean);
+  const el = h(`<div class="hero">${badge('megaphone', color)}<div>
+    <p class="kicker" style="color:${color}">${esc(title)}</p>
+    <p class="big">${esc(p.road)} <span class="muted">${esc(km(p.km))}</span></p>
+    ${p.dest ? `<p class="muted">Hacia ${esc(p.dest)}</p>` : ''}</div>
+    ${p.limit ? `<span class="speed-sign" aria-label="Límite ${p.limit} km/h">${p.limit}</span>` : ''}</div>
+    <div class="vms-board" role="img" aria-label="Panel: ${esc(lines.join('. '))}">
+    ${picts.length ? `<div class="vms-picts">${picts.slice(0, 2).map((c) => `<img alt="" src="/pict/${esc(c)}.png">`).join('')}</div>` : ''}
+    <div class="vms-text">${lines.map((l) => `<span>${esc(l)}</span>`).join('') || '<span class="muted">(solo pictograma)</span>'}</div></div>
+    <p class="note">${esc(text)} Lo mostramos mientras el panel siga anunciándolo; el punto es el del panel, no el del radar${p.ahead ? `, que según el panel está a unos ${nf.format(p.ahead)} km` : ''}.</p>
+    <div class="rows">${p.valid_from ? row('clock', `Anunciado ${esc(when(p.valid_from))} <span class="muted">(${esc(ago(p.valid_from))})</span>`) : ''}
+    ${row('info', 'Panel de mensaje variable de la DGT. Cataluña y el País Vasco no publican sus paneles en este fichero.')}</div>`);
+  el.querySelectorAll('.vms-picts img').forEach((img) => img.addEventListener('error', () => img.remove()));
+  el.append(actions(ctx, lon, lat, title, false), sourcesLink(ctx));
+  ctx.sheet.show('Control anunciado', `${p.road} ${km(p.km)}`, el);
+}
+
+const MOBILE_SRC: Record<string, string> = {
+  donostia: 'Ayuntamiento de Donostia / San Sebastián: ubicación del radar móvil de hoy.',
+  leon: 'Ayuntamiento de León: calendario mensual de radares móviles.',
+  bcn_multas: 'Multas de velocidad del Ajuntament de Barcelona (datos abiertos).',
+  madrid_multas: 'Multas de velocidad del Ayuntamiento de Madrid (datos abiertos).',
+};
+
+/** A council's mobile radar for today, or a historical zone learnt from fines. */
+export function mobileZone(ctx: Ctx, p: MobileZone, lon: number, lat: number): void {
+  const today = p.kind === 'anunciado';
+  const color = today ? '#ff9500' : '#8e5cd9';
+  const hours = (p.hours || '').split(',').filter(Boolean).map(Number);
+  const hourText = hours.length ? hours.map((x) => `${String(x).padStart(2, '0')}:00`).join(', ') : '';
+  const el = h(`<div class="hero">${badge(today ? 'megaphone' : 'history', color)}<div>
+    <p class="kicker" style="color:${color}">${today ? 'Radar móvil anunciado para hoy' : 'Zona de riesgo histórica'}</p>
+    <p class="big">${esc(p.title)}</p>
+    <p class="muted">${esc(p.city)}${p.title_eu && p.title_eu !== p.title ? ` · ${esc(p.title_eu)}` : ''}</p></div>
+    ${p.limit ? `<span class="speed-sign" aria-label="Límite ${p.limit} km/h">${p.limit}</span>` : ''}</div>
+    <p class="note">${today
+      ? 'El ayuntamiento anuncia un control con radar móvil en esta calle. Marcamos toda la calle porque no publica el punto exacto.'
+      : `Calle donde hubo multas de velocidad en sesiones cortas, unos pocos días: el patrón de un radar móvil, no el de uno fijo. Son datos con meses de retraso: indican dónde se ha controlado antes, no dónde hay un radar ahora.`}</p>
+    <div class="rows">${p.valid_from ? row('calendar', esc(today ? validity(p.valid_from, p.valid_to) : `Multas ${validity(p.valid_from, p.valid_to).replace(/^D/, 'd')}`)) : ''}
+    ${p.fines ? row('gauge', `<b>${nf.format(p.fines)}</b> multas de velocidad${p.days ? ` en ${nf.format(p.days)} días` : ''}${p.span_h != null ? ` · sesiones de unas ${nf.format(Math.max(0.5, p.span_h))} h` : ''}`) : ''}
+    ${hourText ? row('clock', `Horas con multas: ${esc(hourText)}`) : ''}
+    ${p.place && p.place !== p.title ? row('road', `Lugar publicado: ${esc(p.place)}`) : ''}
+    ${row('info', `Fuente: ${esc(MOBILE_SRC[p.src] ?? p.src)}${p.geo ? ` Calle situada con ${esc(p.geo)}.` : ''}`)}</div>`);
+  el.append(actions(ctx, lon, lat, p.title, false), sourcesLink(ctx));
+  ctx.sheet.show(today ? 'Radar móvil de hoy' : 'Zona de riesgo histórica', p.city, el);
+}
+
+function sourcesLink(ctx: Ctx): HTMLElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'link-button';
+  b.innerHTML = `${iconSvg('info', 16)} Estado de las fuentes de radares`;
+  b.addEventListener('click', () => void sources(ctx));
+  return b;
+}
+
+const SOURCE_STATUS: Record<string, [string, string]> = { ok: ['Al día', 'ok'], obsoleta: ['Obsoleta', 'stale'], falta: ['Falta', 'missing'] };
+
+/** Each enforcement source: ok / stale / missing, age of its data and licence. */
+export async function sources(ctx: Ctx): Promise<void> {
+  const el = h(`<p class="muted loading">${iconSvg('loader', 16)} Cargando…</p>`);
+  ctx.sheet.show('Fuentes de radares', 'Estado y antigüedad de cada fuente', el, { push: true });
+  const stamp = ctx.sheet.stamp;
+  const data = await live<{ generated: string; sources: SourceStatus[] }>('sources', 60).catch(() => null);
+  if (ctx.sheet.stamp !== stamp) return;
+  if (!data) {
+    el.innerHTML = '<p class="warn">No se ha podido cargar el estado de las fuentes.</p>';
+    return;
+  }
+  const age = (d?: number | null) => d == null ? '' : d < 1 ? 'datos de hoy' : d < 60 ? `datos de hace ${Math.round(d)} días` : `datos de hace ${Math.round(d / 30.4)} meses`;
+  el.innerHTML = `<p class="note">Si una fuente falla seguimos mostrando su última copia buena, marcada como obsoleta cuando envejece.</p>
+    <ul class="list sources-list">${data.sources.map((s) => {
+      const [label, cls] = SOURCE_STATUS[s.status] ?? SOURCE_STATUS.falta!;
+      return `<li><div><span class="status-chip ${cls}">${label}</span> <b>${esc(s.name)}</b><br>
+        <small>${esc(s.by)} · ${esc(s.licence)}${s.count != null && s.status !== 'falta' ? ` · ${nf.format(s.count)} elementos` : ''}${s.data_age_days != null ? ` · ${age(s.data_age_days)}` : ''}${s.fetched ? ` · revisada ${esc(ago(s.fetched))}` : ''}</small>
+        ${s.why ? `<br><small class="muted">${esc(s.why)}</small>` : ''}${s.note ? `<br><small class="muted">${esc(s.note)}</small>` : ''}
+        ${s.url ? `<br><a class="small" href="${esc(s.url)}" target="_blank" rel="noopener">Origen ${iconSvg('external', 12)}</a>` : ''}</div></li>`;
+    }).join('')}</ul>`;
 }
 
 // ---------------------------------------------------------------- variable message signs

@@ -12,7 +12,13 @@ export interface Incident {
 export interface Congestion { id: string; city: string; name: string; state: number; load?: number; flow?: number }
 export const TRAFFIC_STATE: Record<number, [string, string]> = { 1: ['Fluido', '#30c15a'], 2: ['Denso', '#e0b400'], 3: ['Muy denso', '#ff9500'], 4: ['Congestión', '#ff3b30'], 5: ['Cortado', '#7a0b0b'] };
 export interface Camera { id: string; road: string; km?: number; prov?: string; dest?: string }
-export interface Radar { id: string; kind: 'fijo' | 'tramo' | 'semaforo' | 'cinturon' | 'linea' | 'stop'; src?: 'dgt' | 'osm'; pos?: 'exacta' | 'aproximada'; label?: string; road?: string; km?: number; km2?: number; len?: number; prov?: string; dir?: string; maxspeed?: number; note?: string }
+export interface Radar { id: string; kind: 'fijo' | 'tramo' | 'semaforo' | 'cinturon' | 'linea' | 'stop' | 'remolque'; src?: 'dgt' | 'osm' | 'sct' | 'madrid'; pos?: 'exacta' | 'aproximada'; label?: string; road?: string; km?: number; km2?: number; len?: number; prov?: string; dir?: string; maxspeed?: number; note?: string }
+/** A DGT message sign announcing a speed check now (radar-alerts.json). */
+export interface Alert { id: string; kind: 'movil' | 'tramo' | 'radar'; limit?: number; ahead?: number; road: string; km?: number; prov?: string; dest?: string; lines: string; picts?: string; valid_from?: string }
+/** A mobile-radar zone: announced by a council for today, or learnt from past fines (radar-mobile.json). */
+export interface MobileZone { id: string; kind: 'anunciado' | 'historico'; src: string; city: string; title: string; title_eu?: string; place?: string; limit?: number; shift?: string; geo?: string; fines?: number; days?: number; span_h?: number; hours?: string; valid_from?: string; valid_to?: string }
+/** One row of sources.json. */
+export interface SourceStatus { id: string; name: string; by: string; licence: string; url: string; status: 'ok' | 'obsoleta' | 'falta'; why?: string; fetched?: string; data_date?: string; data_age_days?: number | null; count?: number; note?: string; error?: string }
 export interface Panel { id: string; road: string; km?: number; prov?: string; dest?: string; lines: string; picts: string; set?: string; on: boolean }
 export interface Station {
   id: string; brand: string; addr: string; muni: string; prov: string; cp: string; hours: string; side: string; public: boolean;

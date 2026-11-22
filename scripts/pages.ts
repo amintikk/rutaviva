@@ -61,7 +61,7 @@ function shell(p: Page): string {
 ${p.body}
 </main>
 <footer class="site-foot">
-<p><b>Ruta viva</b> reúne datos abiertos oficiales: DGT (Punto de Acceso Nacional), Servei Català de Trànsit, Tráfico del Gobierno Vasco, Ministerio para la Transición Ecológica, REVE (Red Eléctrica), Instituto Geográfico Nacional, NASA FIRMS, Copernicus EFFIS y OpenStreetMap. No es una web oficial ni está vinculada a esos organismos.</p>
+<p><b>Ruta viva</b> reúne datos abiertos oficiales: DGT (Punto de Acceso Nacional), Servei Català de Trànsit, Tráfico del Gobierno Vasco, ayuntamientos de Madrid, Barcelona y Donostia / San Sebastián, Ministerio para la Transición Ecológica, REVE (Red Eléctrica), Instituto Geográfico Nacional, NASA FIRMS, Copernicus EFFIS y OpenStreetMap. No es una web oficial ni está vinculada a esos organismos.</p>
 <nav aria-label="Información legal"><a href="/acerca/">Acerca de</a><a href="/fuentes/">Fuentes y licencias</a><a href="/aviso-legal/">Aviso legal</a><a href="/privacidad/">Privacidad</a><a href="/terminos/">Términos</a><a href="#" data-consent-open>Cookies</a><a href="https://github.com/amintikk/rutaviva">Código</a></nav>
 </footer>
 <script type="module" src="${p.script ?? '/src/page.ts'}"></script>
@@ -135,11 +135,12 @@ const STATIC: Page[] = [
 <li><b>Cámaras</b>: la imagen se pide a la DGT como mucho cada 2 minutos; la lista de cámaras, cada 6 horas.</li>
 <li><b>Gasolineras</b>: precios cada 30 minutos; historia diaria desde 2007.</li>
 <li><b>Recarga</b>: estaciones cada día; estado y precio en tiempo real al consultarlas; recorrido completo cada noche.</li>
-<li><b>Radares, tramos y zonas de bajas emisiones</b>: cada pocas horas. Los radares combinan la lista oficial de la DGT con los que la comunidad de OpenStreetMap ha cartografiado (Cataluña, País Vasco, radares municipales y de semáforo); los segundos se distinguen en el mapa y en su ficha.</li><li><b>Terremotos</b>: cada 10 minutos.</li><li><b>Incendios</b>: cada media hora. Los focos de calor llegan unas 3 horas después de cada paso del satélite; no todos son incendios forestales (también quemas agrícolas e industria). Los que se repiten en el mismo sitio muchos días, casi siempre fábricas, se ocultan.</li><li><b>Peajes y áreas de servicio</b>: con cada actualización del mapa de OpenStreetMap. No mostramos el precio de los peajes porque no hay una fuente abierta y actualizada.</li></ul>
+<li><b>Radares, tramos y zonas de bajas emisiones</b>: cada pocas horas. Los radares combinan las listas oficiales de la DGT, del Servei Català de Trànsit y del Ayuntamiento de Madrid con los que la comunidad de OpenStreetMap ha cartografiado (País Vasco, Navarra, radares municipales y de semáforo); la ficha de cada uno dice de dónde sale. Los tramos donde la DGT usa radares móviles se dibujan como zonas de vigilancia, no como radares.</li>
+<li><b>Controles móviles</b>: los que anuncian ahora los paneles de la DGT (cada 3 minutos, mientras el panel lo muestre), el radar móvil del día que publica Donostia / San Sebastián y zonas de riesgo históricas deducidas de las multas de velocidad de Madrid y Barcelona, que se publican con meses de retraso. El estado y la antigüedad de cada fuente se ven en el mapa, en «Estado de las fuentes de radares».</li><li><b>Terremotos</b>: cada 10 minutos.</li><li><b>Incendios</b>: cada media hora. Los focos de calor llegan unas 3 horas después de cada paso del satélite; no todos son incendios forestales (también quemas agrícolas e industria). Los que se repiten en el mismo sitio muchos días, casi siempre fábricas, se ocultan.</li><li><b>Peajes y áreas de servicio</b>: con cada actualización del mapa de OpenStreetMap. No mostramos el precio de los peajes porque no hay una fuente abierta y actualizada.</li></ul>
 <h2>Lo que hay que saber</h2>
 <ul><li>Solo aparece lo que publican los organismos. Un accidente que la DGT no ha registrado no sale, y algunos avisos siguen activos después de resolverse.</li>
 <li>Las incidencias se clasifican automáticamente a partir de los códigos del estándar europeo DATEX II.</li>
-<li>Los radares oficiales son los que publica la DGT; los radares móviles y de helicóptero no se publican.</li>
+<li>Los radares fijos oficiales son los que publican la DGT, el Servei Català de Trànsit y el Ayuntamiento de Madrid. Nadie publica dónde está un radar móvil en cada momento: mostramos dónde se anuncia o dónde se ha controlado antes, nunca una ubicación garantizada. Euskadi y Navarra no publican sus radares en abierto; ahí solo hay los de OpenStreetMap.</li>
 <li>Los tiempos de viaje son sin tráfico, calculados con un servidor propio sobre OpenStreetMap.</li>
 <li>Los precios de recarga y su estado los publican los propios operadores en REVE; si un operador no los envía, aparece «sin datos».</li></ul>
 <p>Más detalle técnico en <a href="/fuentes/">Fuentes y licencias</a>. El código es abierto: <a href="https://github.com/amintikk/rutaviva">github.com/amintikk/rutaviva</a>.</p>`),
@@ -149,13 +150,18 @@ const STATIC: Page[] = [
     description: 'Los conjuntos de datos abiertos que usa Ruta viva, sus licencias y cómo se citan.',
     body: prose(`<h1>Fuentes y licencias</h1>
 <table class="sources"><thead><tr><th>Datos</th><th>Origen</th><th>Licencia</th></tr></thead><tbody>
-<tr><td>Incidencias, cámaras, paneles, radares, tramos INVIVE, tramos de riesgo para motos, zonas de bajas emisiones</td><td>Dirección General de Tráfico, <a href="https://nap.dgt.es/">Punto de Acceso Nacional de tráfico y movilidad</a> (DATEX II)</td><td>CC BY 4.0</td></tr>
+<tr><td>Incidencias, cámaras, paneles (y los controles de velocidad que anuncian), radares, tramos de radar móvil, tramos INVIVE, tramos de riesgo para motos, zonas de bajas emisiones</td><td>Dirección General de Tráfico, <a href="https://nap.dgt.es/">Punto de Acceso Nacional de tráfico y movilidad</a> (DATEX II)</td><td>CC BY 4.0</td></tr>
 <tr><td>Incidencias de Cataluña</td><td>Servei Català de Trànsit, vía el Punto de Acceso Nacional</td><td>CC BY 4.0</td></tr>
 <tr><td>Incidencias del País Vasco</td><td>Dirección de Tráfico del Gobierno Vasco, vía el Punto de Acceso Nacional</td><td>CC BY 4.0</td></tr>
 <tr><td>Precios de carburantes (actuales e históricos desde 2007)</td><td>Ministerio para la Transición Ecológica y el Reto Demográfico, <a href="https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes/">servicio REST de precios</a></td><td>Reutilización de la información del sector público (Ley 37/2007), con cita de la fuente</td></tr>
 <tr><td>Estaciones de recarga (datos fijos)</td><td>MITERD, vía el Punto de Acceso Nacional</td><td>CC BY 4.0</td></tr>
 <tr><td>Estado y precio de los puntos de recarga</td><td><a href="https://www.mapareve.es/">REVE</a>, Red Eléctrica, con datos de los operadores (Orden TED/445/2023)</td><td>Consulta del mapa público; se cachea y se consulta con moderación</td></tr>
-<tr><td>Radares que no están en la lista de la DGT y límite de velocidad de cada radar</td><td>© colaboradores de <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> (elementos <code>highway=speed_camera</code>)</td><td>ODbL</td></tr>
+<tr><td>Radares fijos, de tramo y ubicaciones de radares remolque de Cataluña</td><td>Generalitat de Catalunya. Departament d'Interior i Seguretat Pública. <a href="https://transit.gencat.cat/ca/seguretat_viaria/cinemometres-fixos-trams-mobils/">Servei Català de Trànsit</a></td><td>Llicència oberta d'ús d'informació – Catalunya</td></tr>
+<tr><td>Radares fijos y de tramo de la ciudad de Madrid; zonas de radar móvil deducidas de sus multas de circulación</td><td>Ayuntamiento de Madrid, <a href="https://datos.madrid.es/">Portal de datos abiertos</a> (conjuntos 300049 y 210104)</td><td>CC BY 4.0</td></tr>
+<tr><td>Zonas de radar móvil deducidas de las multas de tráfico</td><td>Ajuntament de Barcelona, <a href="https://opendata-ajuntament.barcelona.cat/data/es/dataset/denuncies_sancions_transit_bcn_detall">Open Data BCN</a></td><td>CC BY 4.0</td></tr>
+<tr><td>Radar móvil del día en Donostia / San Sebastián</td><td>Ayuntamiento de Donostia / San Sebastián, <a href="https://www.donostia.eus/info/ciudadano/radar_movil.nsf/fwHome?ReadForm&amp;idioma=cas">donostia.eus</a></td><td>Reutilización con cita de la fuente (Ley 37/2007)</td></tr>
+<tr><td>Situar calles de las listas municipales</td><td>© colaboradores de OpenStreetMap (Overpass API, Nominatim) y CartoCiudad (IGN)</td><td>ODbL · CC BY 4.0</td></tr>
+<tr><td>Radares que no están en las listas oficiales y límite de velocidad de cada radar</td><td>© colaboradores de <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> (elementos <code>highway=speed_camera</code>)</td><td>ODbL</td></tr>
 <tr><td>Autopistas de peaje, estaciones de peaje y áreas de servicio</td><td>© colaboradores de <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a></td><td>ODbL</td></tr>
 <tr><td>Focos de calor por satélite</td><td><a href="https://firms.modaps.eosdis.nasa.gov/">NASA FIRMS</a> (VIIRS)</td><td>Uso libre con atribución</td></tr>
 <tr><td>Zonas quemadas</td><td><a href="https://forest-fire.emergency.copernicus.eu/">Copernicus EFFIS</a></td><td>Uso libre con atribución</td></tr>
@@ -217,7 +223,8 @@ function roadPages(): Page[] {
     roads.set(r, e);
   };
   for (const f of readLive('cameras')) add(f.properties.road, 'cams', f);
-  for (const f of readLive('radars')) add(f.properties.road, 'radars', f);
+  // Trailer-radar spots are not radars that are always there.
+  for (const f of readLive('radars')) if (f.properties.kind !== 'remolque') add(f.properties.road, 'radars', f);
   for (const f of readLive('invive')) add(f.properties.road, 'stretches', f);
   const pages: Page[] = [];
   const list: { road: string; slug: string; cams: number; radars: number; stretches: number }[] = [];
@@ -239,7 +246,7 @@ function roadPages(): Page[] {
 ${cams.length ? `<section class="card"><h2>Cámaras (${cams.length})</h2><div class="cam-grid" data-road="${esc(road)}">${cams.slice(0, 60).map((f) => `<figure data-cam="${esc(f.properties.id)}"><img loading="lazy" alt="Cámara de la ${esc(road)} ${esc(km(f.properties.km))}" src="/cam/${esc(f.properties.id)}.jpg"><figcaption>${esc(km(f.properties.km))}${f.properties.dest ? ` · hacia ${esc(f.properties.dest)}` : ''}</figcaption></figure>`).join('')}</div></section>` : ''}
 ${fijos.length || tramos.length ? `<section class="card"><h2>Radares</h2><table class="plain"><thead><tr><th>Tipo</th><th>Situación</th><th>Provincia</th></tr></thead><tbody>
 ${[...fijos.map((f) => `<tr><td>Fijo</td><td>${esc(km(f.properties.km))}</td><td>${esc(provName(String(f.properties.prov ?? '')))}</td></tr>`), ...tramos.map((f) => `<tr><td>Tramo${f.properties.len ? ` (${esc(String(f.properties.len).replace('.', ','))} km)` : ''}</td><td>${esc(km(f.properties.km))}${f.properties.km2 != null ? ` a ${esc(km(f.properties.km2))}` : ''}</td><td>${esc(provName(String(f.properties.prov ?? '')))}</td></tr>`)].join('')}
-</tbody></table><p class="muted small">Ubicaciones publicadas por la DGT. No incluye radares móviles.</p></section>` : ''}
+</tbody></table><p class="muted small">Ubicaciones oficiales de la DGT, del Servei Català de Trànsit o del Ayuntamiento de Madrid, y de OpenStreetMap donde no hay lista oficial. No incluye radares móviles.</p></section>` : ''}
 ${e.stretches.length ? `<section class="card"><h2>Tramos de vigilancia intensificada (INVIVE)</h2><p>${e.stretches.sort((a, b) => kmOf(a) - kmOf(b)).map((f) => `<span class="chip">${esc(km(f.properties.km))}${f.properties.km2 != null ? ` – ${esc(String(f.properties.km2).replace('.', ','))}` : ''}</span>`).join(' ')}</p></section>` : ''}`;
     pages.push({
       path: `/carretera/${s}/`, kind: 'road', title: `${road} hoy: estado, cámaras y radares en directo · Ruta viva`,

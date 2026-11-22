@@ -4,12 +4,13 @@ import { CATS, live, type Cat, type FC } from '../data.ts';
 import { openState } from '../ui/hours.ts';
 import { markerImage, radarImage, squareImage, type IconName } from '../ui/icons.ts';
 
-export type Group = 'traffic' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'tolls' | 'fires' | 'vms' | 'zbe' | 'quakes';
+export type Group = 'traffic' | 'cameras' | 'radars' | 'mobile' | 'fuel' | 'ev' | 'tolls' | 'fires' | 'vms' | 'zbe' | 'quakes';
 
 export const GROUPS: { id: Group; label: string; icon: IconName; color: string; hint: string }[] = [
   { id: 'traffic', label: 'Tráfico', icon: 'alert', color: '#ff3b30', hint: 'Accidentes, cortes, obras, nieve y atascos en Madrid y Barcelona' },
   { id: 'cameras', label: 'Cámaras', icon: 'video', color: '#5856d6', hint: 'Imagen en directo de la DGT' },
-  { id: 'radars', label: 'Radares', icon: 'cctv', color: '#ff2d55', hint: 'Fijos, de tramo y tramos vigilados' },
+  { id: 'radars', label: 'Radares', icon: 'cctv', color: '#ff2d55', hint: 'Fijos, de tramo, remolques y zonas de radar móvil' },
+  { id: 'mobile', label: 'Controles móviles', icon: 'megaphone', color: '#ff9500', hint: 'Anunciados ahora en paneles y por ayuntamientos; zonas históricas' },
   { id: 'fuel', label: 'Gasolineras', icon: 'fuel', color: '#34c759', hint: 'Precio de hoy y su historia' },
   { id: 'ev', label: 'Recarga', icon: 'zap', color: '#00a6a6', hint: 'Puntos de recarga, estado y precio' },
   { id: 'tolls', label: 'Peajes', icon: 'ticket', color: '#ff9f0a', hint: 'Autopistas de peaje, cabinas y áreas de servicio' },
@@ -20,13 +21,15 @@ export const GROUPS: { id: Group; label: string; icon: IconName; color: string; 
 ];
 
 // How often each group's data is fetched again while visible (seconds).
-const REFRESH: Record<Group, number> = { traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, tolls: 86400, fires: 1800, vms: 180, zbe: 86400, quakes: 600 };
+const REFRESH: Record<Group, number> = { traffic: 180, cameras: 3600, radars: 86400, mobile: 180, fuel: 1800, ev: 86400, tolls: 86400, fires: 1800, vms: 180, zbe: 86400, quakes: 600 };
 const SOURCES: Record<Group, string[]> = {
-  traffic: ['incidents', 'incident-lines', 'traffic'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
+  traffic: ['incidents', 'incident-lines', 'traffic'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'radar-zones', 'invive', 'motos'],
+  mobile: ['radar-alerts', 'radar-mobile'],
   fuel: ['fuel'], ev: ['ev'], tolls: ['tolls'], fires: ['fires'], vms: ['vms'], zbe: ['zbe'], quakes: ['quakes'],
 };
 
 export const CLICKABLE = ['traffic-lines', 'traffic-dots', 'inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
+  'radar-zones', 'radar-zones-ends', 'alert-icon', 'alert-dot', 'mobile-fill',
   'fuel-dot', 'fuel-label', 'toll-line', 'toll-booth', 'services-icon', 'fire-icon', 'fire-dot', 'burnt-fill', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot', 'invive-ends', 'motos-ends'];
 
 const empty = (): FC => ({ type: 'FeatureCollection', features: [] });
@@ -82,7 +85,7 @@ export class Layers {
   async install(): Promise<void> {
     const m = this.map;
     for (const names of Object.values(SOURCES)) {
-      for (const n of names) if (!m.getSource(n)) m.addSource(n, { type: 'geojson', data: this.data.get(n) ?? empty(), promoteId: n === 'incident-lines' || n === 'radar-sections' || n === 'invive' || n === 'motos' ? undefined : 'id' });
+      for (const n of names) if (!m.getSource(n)) m.addSource(n, { type: 'geojson', data: this.data.get(n) ?? empty(), promoteId: n === 'incident-lines' || n === 'radar-sections' || n === 'radar-zones' || n === 'invive' || n === 'motos' ? undefined : 'id' });
     }
     if (!m.getSource('ev-live')) m.addSource('ev-live', { type: 'geojson', data: empty() });
     if (!m.getSource('selection')) m.addSource('selection', { type: 'geojson', data: empty() });
@@ -107,6 +110,8 @@ export class Layers {
     for (const [cat, c] of Object.entries(CATS)) add(`inc-${cat}`, markerImage(c.icon, c.color, 30, 2, ring));
     add('cam', squareImage('video', '#5856d6', 24));
     add('vms', squareImage('panel', '#d99a00', 24));
+    add('alert-movil', markerImage('megaphone', '#ff9500', 30, 2, ring));
+    add('alert-radar', markerImage('megaphone', '#e0201b', 28, 2, ring));
     add('ev-dc', markerImage('zap', '#00a6a6', 26, 2, ring));
     add('ev-ac', markerImage('plug', '#4aa8a8', 24, 2, ring));
     add('fuel-pin', markerImage('fuel', '#34c759', 26, 2, ring));
@@ -140,6 +145,15 @@ export class Layers {
     // Stretches without a reliable road geometry: just their two ends.
     add({ id: 'invive-ends', type: 'circle', source: 'invive', minzoom: 7, filter: ['==', ['geometry-type'], 'MultiPoint'], paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 6], 'circle-color': '#ff2d55', 'circle-opacity': 0.45, 'circle-stroke-color': '#ff2d55', 'circle-stroke-width': 1.5 } }, before);
     add({ id: 'motos-ends', type: 'circle', source: 'motos', minzoom: 7, filter: ['==', ['geometry-type'], 'MultiPoint'], paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 6], 'circle-color': '#af52de', 'circle-opacity': 0.45, 'circle-stroke-color': '#af52de', 'circle-stroke-width': 1.5 } }, before);
+    // DGT mobile-radar stretches: where checks happen, not where a radar is now. Thin and dashed.
+    add({ id: 'radar-zones', type: 'line', source: 'radar-zones', minzoom: 7, filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: {
+      'line-color': '#ff6b35', 'line-opacity': 0.55, 'line-dasharray': [2, 2], 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.5, 12, 4] } }, before);
+    add({ id: 'radar-zones-ends', type: 'circle', source: 'radar-zones', minzoom: 8, filter: ['==', ['geometry-type'], 'MultiPoint'], paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 2.5, 12, 5], 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': '#ff6b35', 'circle-stroke-width': 1.5, 'circle-stroke-opacity': 0.7 } }, before);
+    // Mobile checks: council lists for today (orange) and historical zones from fines (violet, fainter).
+    add({ id: 'mobile-fill', type: 'fill', source: 'radar-mobile', paint: {
+      'fill-color': ['match', ['get', 'kind'], 'anunciado', '#ff9500', '#8e5cd9'], 'fill-opacity': ['match', ['get', 'kind'], 'anunciado', 0.32, 0.16] } }, before);
+    add({ id: 'mobile-line', type: 'line', source: 'radar-mobile', paint: {
+      'line-color': ['match', ['get', 'kind'], 'anunciado', '#ff9500', '#8e5cd9'], 'line-opacity': 0.7, 'line-width': 1 } }, before);
     add({ id: 'radar-sections', type: 'line', source: 'radar-sections', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: {
       'line-color': '#0a84ff', 'line-opacity': ['case', ['==', ['get', 'pos'], 'aproximada'], 0.45, 0.85],
       'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2, 12, 6] } }, before);
@@ -208,13 +222,21 @@ export class Layers {
 
     // Radars.
     add({ id: 'radar-dot', type: 'circle', source: 'radars', minzoom: 5, maxzoom: 9, paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 9, 3.6], 'circle-color': ['match', ['get', 'kind'], 'tramo', '#0a84ff', 'semaforo', '#8e44ad', 'cinturon', '#0f9d8a', 'linea', '#f08a24', 'stop', '#b3261e', '#e0201b'],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 9, 3.6], 'circle-color': ['match', ['get', 'kind'], 'tramo', '#0a84ff', 'semaforo', '#8e44ad', 'cinturon', '#0f9d8a', 'linea', '#f08a24', 'stop', '#b3261e', 'remolque', '#ff9500', '#e0201b'],
       'circle-stroke-color': halo, 'circle-stroke-width': 0.8 } });
     // Speed-limit sign markers, drawn on demand for each limit and kind (see installRadarImages).
     add({ id: 'radar-icon', type: 'symbol', source: 'radars', minzoom: 9, layout: {
       'icon-image': ['concat', 'rs-', ['to-string', ['coalesce', ['get', 'maxspeed'], 0]], '-', ['coalesce', ['get', 'kind'], 'fijo']],
       'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 13, 1],
       'symbol-sort-key': ['coalesce', ['get', 'maxspeed'], 0] } });
+
+    // Speed checks announced by the DGT's message signs right now.
+    add({ id: 'alert-dot', type: 'circle', source: 'radar-alerts', maxzoom: 8, paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 3, 8, 5], 'circle-color': ['match', ['get', 'kind'], 'movil', '#ff9500', '#e0201b'],
+      'circle-stroke-color': halo, 'circle-stroke-width': 1.2 } });
+    add({ id: 'alert-icon', type: 'symbol', source: 'radar-alerts', minzoom: 8, layout: {
+      'icon-image': ['match', ['get', 'kind'], 'movil', 'alert-movil', 'alert-radar'], 'icon-allow-overlap': true,
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 8, 0.75, 12, 1] } });
 
     // Earthquakes.
     add({ id: 'quake-dot', type: 'circle', source: 'quakes', paint: {
@@ -243,7 +265,8 @@ export class Layers {
     return {
       traffic: ['traffic-lines', 'traffic-dots', 'inc-lines-casing', 'inc-lines', 'inc-dots-far', 'inc-dots', 'inc-points'],
       cameras: ['cam-dot', 'cam-icon'],
-      radars: ['radar-dot', 'radar-icon', 'radar-sections', 'invive', 'motos', 'invive-ends', 'motos-ends'],
+      radars: ['radar-dot', 'radar-icon', 'radar-sections', 'radar-zones', 'radar-zones-ends', 'invive', 'motos', 'invive-ends', 'motos-ends'],
+      mobile: ['mobile-fill', 'mobile-line', 'alert-dot', 'alert-icon'],
       fuel: ['fuel-dot', 'fuel-label'],
       ev: ['ev-dot', 'ev-icon', 'ev-live'],
       tolls: ['toll-line', 'toll-booth', 'services-icon'],
@@ -341,7 +364,8 @@ export function featureGroup(f: MapGeoJSONFeature): Group | 'ev-live' | null {
   const s = f.source;
   if (s === 'incidents' || s === 'incident-lines' || s === 'traffic') return 'traffic';
   if (s === 'cameras') return 'cameras';
-  if (s === 'radars' || s === 'radar-sections' || s === 'invive' || s === 'motos') return 'radars';
+  if (s === 'radars' || s === 'radar-sections' || s === 'radar-zones' || s === 'invive' || s === 'motos') return 'radars';
+  if (s === 'radar-alerts' || s === 'radar-mobile') return 'mobile';
   if (s === 'fuel') return 'fuel';
   if (s === 'ev') return 'ev';
   if (s === 'ev-live') return 'ev-live';

@@ -14,6 +14,7 @@ import time
 import traceback
 from collections import Counter
 from typing import Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 import aiohttp
 from aiohttp import web
@@ -24,12 +25,16 @@ from . import fuelhist as H
 from . import dgt_radares as DR
 from . import enforcement as E
 from . import osm as O
+from . import local_radars as LR
+from . import radar_sources as RS
+from . import sources as S
 from . import traffic as TR
 from .pk import PkIndex
 from .reve import Reve, ranking, summarize, sweep
 from .store import DATA as DATA_DIR, Meta, collection, db, feature, now_iso, read_json as read_live, write_json
 
 log = logging.getLogger('rutaviva')
+MADRID = ZoneInfo('Europe/Madrid')
 NAP = 'https://nap.dgt.es'
 MITECO = 'https://sedeaplicaciones.minetur.gob.es/ServiciosRESTCarburantes/PreciosCarburantes'
 UA = 'RutaViva/1.0 (+https://rutaviva.aminox.dev/fuentes/)'
@@ -65,6 +70,7 @@ CITY = {
 class Worker:
     def __init__(self) -> None:
         self.meta = Meta()
+        self.sources = S.Sources()
         self.con = db()
         H.ensure_tables(self.con)
         self.session: aiohttp.ClientSession | None = None
@@ -74,6 +80,9 @@ class Worker:
     # ------------------------------------------------------------ http
 
     async def get(self, url: str, *, accept: str = '*/*', timeout: float = 90, tries: int = 3) -> bytes:
+        return (await self.get_full(url, accept=accept, timeout=timeout, tries=tries))[0]
+
+    async def get_full(self, url: str, *, accept: str = '*/*', timeout: float = 90, tries: int = 3) -> tuple[bytes, dict[str, str]]:
         assert self.session
         err: Exception | None = None
         for i in range(tries):
@@ -82,11 +91,42 @@ class Worker:
                                             timeout=aiohttp.ClientTimeout(total=timeout)) as r:
                     if r.status != 200:
                         raise RuntimeError(f'HTTP {r.status} {url}')
-                    return await r.read()
+                    return await r.read(), {k.lower(): v for k, v in r.headers.items() if k.lower() in ('last-modified', 'etag')}
             except Exception as e:  # noqa: BLE001 - retried, then reported in meta.json
                 err = e
                 await asyncio.sleep(3 * (i + 1))
         raise RuntimeError(f'{url}: {err}')
+
+    async def fetch(self, url: str, data: dict | None = None) -> bytes:
+        """GET, or POST a form (Overpass); for the geocoders, one call at a time with a pause."""
+        assert self.session
+        await asyncio.sleep(1.2)
+        if data is None:
+            return await self.get(url, accept='application/json', timeout=60, tries=2)
+        async with self.session.post(url, data=data, headers={'User-Agent': UA}, timeout=aiohttp.ClientTimeout(total=90)) as r:
+            if r.status != 200:
+                raise RuntimeError(f'HTTP {r.status} {url}')
+            return await r.read()
+
+    async def source(self, sid: str, url: str, *, check: Callable[[bytes], object] | None = None, timeout: float = 120,
+                     accept: str = '*/*') -> tuple[bytes, str]:
+        """Download one enforcement source and keep it as the last good copy; if it fails (or `check`
+        rejects it) use that copy. Returns (data, date of the data per Last-Modified, '' if unknown)."""
+        try:
+            data, headers = await self.get_full(url, timeout=timeout, accept=accept)
+            if check:
+                check(data)
+            S.save_copy(sid, data, headers)
+            date = S.http_date(headers.get('last-modified', ''))
+            self.sources.ok(sid, data_date=date)
+            return data, date
+        except Exception as e:  # noqa: BLE001 - fall back to the last copy that worked
+            log.warning('source %s: %s', sid, e)
+            self.sources.fail(sid, str(e))
+            old = S.last_copy(sid)
+            if not old:
+                raise
+            return old[0], S.http_date(old[1].get('last-modified', ''))
 
     # ------------------------------------------------------------ feeds
 
@@ -220,14 +260,21 @@ class Worker:
         try:
             html = (await self.get(DR.PAGE, accept='text/html')).decode('utf-8', 'replace')
             links = DR.pdf_links(html)
-            inf = DR.parse_informe(DR.pdf_text(await self.get(links['informe'], timeout=120)))
-            eq = DR.parse_equipos(DR.pdf_text(await self.get(links['equipos'], timeout=120)))
+            inf_pdf, inf_h = await self.get_full(links['informe'], timeout=120)
+            eq_pdf, eq_h = await self.get_full(links['equipos'], timeout=120)
+            inf = DR.parse_informe(DR.pdf_text(inf_pdf))
+            eq = DR.parse_equipos(DR.pdf_text(eq_pdf))
             if len([r for r in inf if r['kind'] == 'fijo']) < 400:
                 raise RuntimeError(f'informe con solo {len(inf)} filas')
-            cache.write_text(json.dumps({'informe': inf, 'equipos': eq, 'links': links, 'at': now_iso()}))
+            dates = {'informe': S.http_date(inf_h.get('last-modified', '')), 'equipos': S.http_date(eq_h.get('last-modified', ''))}
+            cache.write_text(json.dumps({'informe': inf, 'equipos': eq, 'links': links, 'dates': dates, 'at': now_iso()}))
+            self.sources.ok('dgt_informe', count=len(inf), data_date=dates['informe'])
+            self.sources.ok('dgt_equipos', count=len(eq), data_date=dates['equipos'])
             return inf, eq
         except Exception as e:  # noqa: BLE001 - fall back to the last list that worked
             log.warning('dgt lists: %s', e)
+            self.sources.fail('dgt_informe', str(e))
+            self.sources.fail('dgt_equipos', str(e))
             if cache.exists():
                 d = json.loads(cache.read_text())
                 return d['informe'], d['equipos']
@@ -272,6 +319,20 @@ class Worker:
                  for p in panels]
         write_json('vms', collection(feats, generated=now_iso()))
         self.meta.ok('vms', sum(1 for p in panels if p['lines'] or p['picts']))
+        # Panels announcing a speed check right now: valid while the panel shows it.
+        alerts = []
+        for p in panels:
+            chk = RS.speed_check(p['lines'], p['picts'])
+            if not chk:
+                continue
+            alerts.append(feature(p['lon'], p['lat'], {k: v for k, v in {
+                'id': f"vms:{p['id']}", 'panel': p['id'], 'kind': chk['kind'], 'limit': chk['limit'], 'ahead': chk['ahead'],
+                'road': p['road'], 'km': p['km'], 'prov': p['prov'].title(), 'dest': p['dest'], 'lines': '\n'.join(p['lines']),
+                'picts': ','.join(p['picts']), 'valid_from': p['set'], 'src': 'dgt'}.items() if v not in (None, '')}))
+        write_json('radar-alerts', collection(alerts, generated=now_iso()))
+        kinds = Counter(f['properties']['kind'] for f in alerts)
+        self.sources.ok('dgt_paneles', count=len(alerts), data_date=now_iso(),
+                        note=', '.join(f'{v} {k}' for k, v in sorted(kinds.items())) + '. Cataluña y Euskadi no publican sus paneles en este fichero.')
 
     async def cameras(self) -> None:
         cams = F.cameras(await self.get(URLS['cams']))
@@ -283,11 +344,41 @@ class Worker:
         self.meta.ok('cameras', len(feats))
 
     async def radars(self) -> None:
-        rad, inv, mot = await asyncio.gather(self.get(URLS['radars']), self.get(URLS['invive']), self.get(URLS['motos']))
+        def datex(data: bytes) -> None:
+            if b'<' not in data[:200]:
+                raise RuntimeError('no es XML')
+
+        (rad, d_rad), (inv, d_inv), (mot, d_mot) = await asyncio.gather(
+            self.source('nap_radares', URLS['radars'], check=datex), self.source('nap_invive', URLS['invive'], check=datex),
+            self.source('nap_motos', URLS['motos'], check=datex))
         nap = F.radars(rad)
+        stretches = {'invive': F.stretches(inv), 'motos': F.stretches(mot)}
+        for sid, data, n in (('nap_radares', rad, len(nap)), ('nap_invive', inv, len(stretches['invive'])), ('nap_motos', mot, len(stretches['motos']))):
+            m = re.search(rb'publicationTime>([^<]+)<', data[:5000])
+            self.sources.state.setdefault(sid, {})['data_date'] = m.group(1).decode()[:19] if m else ''
+            self.sources.count(sid, n)
         osm = await self.osm_data()
         informe, equipos = await self.dgt_lists()
-        stretches = {'invive': F.stretches(inv), 'motos': F.stretches(mot)}
+        sct: list[dict] = []
+        for sid, kind in (('sct_fijos', 'fijo'), ('sct_remolque', 'remolque')):
+            try:
+                data, _ = await self.source(sid, RS.SCT_FILES[sid], check=lambda d: None if b'Via' in d[:400] else (_ for _ in ()).throw(RuntimeError('formato inesperado')))
+                rows, bad = RS.parse_sct(data.decode('latin-1'), kind)
+                sct += rows
+                self.sources.count(sid, len(rows), f'{len(bad)} líneas ilegibles' if bad else '')
+            except Exception as e:  # noqa: BLE001 - Catalonia falls back to OpenStreetMap
+                log.warning('%s: %s', sid, e)
+        city: list[dict] = []
+        try:
+            data, _ = await self.source('madrid_radares', RS.MADRID_RADARS, check=lambda d: None if b'RADAR' in d[:300].upper() else (_ for _ in ()).throw(RuntimeError('formato inesperado')))
+            city = RS.parse_madrid(data)
+            self.sources.count('madrid_radares', len(city))
+        except Exception as e:  # noqa: BLE001
+            log.warning('madrid radars: %s', e)
+        osm_file = DATA_DIR / 'osm-enforcement.json'
+        if osm_file.exists():
+            self.sources.ok('osm', count=len(osm.get('cameras', [])),
+                            data_date=dt.datetime.fromtimestamp(osm_file.stat().st_mtime, dt.UTC).strftime('%Y-%m-%dT%H:%M:%SZ'))
         # Reference points "road + km -> position" to place the DGT lists.
         index = PkIndex()
         for k, d, lon, lat in osm.get('milestones', []):
@@ -314,8 +405,8 @@ class Worker:
             except Exception:  # noqa: BLE001
                 return None
 
-        points, sections = await E.build(informe, equipos, nap, osm, index, route,
-                                         lambda items: self.snap(items, budget=300, keep_short=99))
+        points, sections, extra = await E.build(informe, equipos, nap, osm, index, route,
+                                                lambda items: self.snap(items, budget=300, keep_short=99), sct=sct, city=city)
         pts = [feature(p['lon'], p['lat'], {k: v for k, v in p.items() if k not in ('lon', 'lat') and v not in (None, '')}) for p in points]
         secs = [feature(0, 0, {k: v for k, v in s.items() if k != 'lines' and v not in (None, '')},
                         {'type': 'MultiLineString', 'coordinates': s['lines']}) for s in sections]
@@ -323,7 +414,28 @@ class Worker:
         write_json('radar-sections', collection(secs))
         counts = Counter((p['src'], p['kind']) for p in points)
         approx = sum(1 for p in points if p.get('pos') == 'aproximada')
+        for sid, src in (('sct_fijos', 'sct'), ('madrid_radares', 'madrid')):
+            if sid in self.sources.state:
+                self.sources.count(sid, sum(v for k, v in counts.items() if k[0] == src and k[1] != 'remolque'))
+        if extra['rejected']:
+            log.info('SCT: %s', ' | '.join(extra['rejected']))
+            self.sources.state.setdefault('sct_fijos', {})['note'] = f"{len(extra['rejected'])} líneas con coordenadas erróneas: " + '; '.join(extra['rejected'][:12])
+            self.sources.flush()
         self.meta.ok('radars', len(points), ', '.join(f'{k[0]} {k[1]}: {v}' for k, v in sorted(counts.items())) + f'; aproximadas: {approx}')
+        # Mobile-radar zones of the DGT report, drawn along the road (a few hundred new ones per round).
+        zones = extra['zones']
+        snapped = await self.snap([(z['id'], [z['a'], z['b']], z['len']) for z in zones], budget=400, keep_short=1.0)
+        zf = []
+        for z in zones:
+            props = {k: v for k, v in z.items() if k not in ('a', 'b') and v not in (None, '')}
+            geom = snapped.get(z['id'])
+            if geom:  # thin dashed lines over tens of km: 30 m of detail is plenty, and keeps the file small
+                geom = [[round(c, 5) for c in pt] for pt in F._simplify([tuple(pt) for pt in geom], 0.0003)]
+            zf.append(feature(0, 0, props, {'type': 'LineString', 'coordinates': geom}) if geom else
+                      feature(0, 0, {**props, 'ends': True}, {'type': 'MultiPoint', 'coordinates': [list(z['a']), list(z['b'])]}))
+        write_json('radar-zones', collection(zf, generated=now_iso()))
+        self.sources.count('dgt_informe', len(informe), f"{len(zones)} tramos de radar móvil situados, {extra['zones_missing']} sin situar; "
+                           f"{sum(1 for f in zf if f['geometry']['type'] == 'LineString')} trazados sobre la carretera")
         for name, st in stretches.items():
             span = lambda x: abs(x['km2'] - x['km']) if x.get('km') is not None and x.get('km2') is not None else None  # noqa: E731
             snapped = await self.snap([(f"{name}:{x['id']}", x['line'], span(x)) for x in st if len(x['line']) == 2],
@@ -339,6 +451,139 @@ class Worker:
                     feats.append(feature(0, 0, {**props, 'ends': True},
                                          {'type': 'MultiPoint', 'coordinates': [list(x['line'][0]), list(x['line'][-1])]}))
             write_json(name, collection(feats))
+
+    async def mobile(self) -> None:
+        """Mobile speed checks announced by city councils (today) and recurring spots learnt from fines."""
+        geo_file = DATA_DIR / 'geocode.json'
+        try:
+            cache = json.loads(geo_file.read_text())
+        except (OSError, ValueError):
+            cache = {}
+        geo = LR.Geocoder(self.fetch, cache)
+        feats: list[dict] = []
+        now = dt.datetime.now(MADRID)
+        today = now.date()
+
+        def at(hhmm: str) -> str:
+            h, m = (int(x) for x in hhmm.split(':'))
+            return dt.datetime(today.year, today.month, today.day, h, m, tzinfo=MADRID).isoformat()
+
+        def zone(lines, props, r_km=0.15):
+            g = LR.circles(lines, r_km=r_km)
+            if g['coordinates']:
+                feats.append(feature(0, 0, {k: v for k, v in props.items() if v not in (None, '', [])}, g))
+
+        # Donostia: today's mobile radar (often nothing planned).
+        try:
+            js, _ = await self.source('donostia', LR.DONOSTIA_JS, check=lambda d: LR.parse_donostia(d))
+            items = LR.parse_donostia(js)
+            for i, it in enumerate(items):
+                zone(it['lines'], {'id': f'donostia:{today}:{i}', 'kind': 'anunciado', 'src': 'donostia', 'city': 'Donostia / San Sebastián',
+                                   'title': it['title'] or it['title_eu'], 'title_eu': it['title_eu'],
+                                   'valid_from': at('00:00'), 'valid_to': at('23:59')}, 0.1)
+            self.sources.count('donostia', len(items), 'Hoy no hay ninguna ubicación planificada' if not items else '')
+        except Exception as e:  # noqa: BLE001
+            log.warning('donostia: %s', e)
+        # León: monthly list. Its terms do not allow reuse without permission, so it is off by default.
+        if os.environ.get('RUTAVIVA_LEON') == '1':
+            try:
+                feats += await self.leon(geo, today, at)
+            except Exception as e:  # noqa: BLE001
+                log.warning('leon: %s', e)
+                self.sources.fail('leon', str(e))
+        # Fines: recomputed when a new month / quarter is published (checked once a day).
+        for city in ('bcn', 'madrid'):
+            try:
+                feats += await self.fines(city, geo)
+            except Exception as e:  # noqa: BLE001
+                log.warning('fines %s: %s', city, e)
+                self.sources.fail(f'{city}_multas', str(e))
+        geo_file.write_text(json.dumps(cache, ensure_ascii=False))
+        write_json('radar-mobile', collection(feats, generated=now_iso()))
+        self.meta.ok('mobile', len(feats), ', '.join(f'{k}: {v}' for k, v in sorted(Counter(f['properties']['src'] for f in feats).items())))
+
+    async def leon(self, geo: LR.Geocoder, today: dt.date, at: Callable[[str], str]) -> list[dict]:
+        cache = DATA_DIR / 'leon.json'
+        data = json.loads(cache.read_text()) if cache.exists() else {}
+        if not data or data.get('checked', '') < (dt.datetime.now(dt.UTC) - dt.timedelta(hours=12)).strftime('%Y-%m-%dT%H'):
+            post = LR.leon_post((await self.get(LR.LEON_NEWS, accept='text/html')).decode('utf-8', 'replace'))
+            pdf = LR.leon_pdf((await self.get(post, accept='text/html')).decode('utf-8', 'replace')) if post else None
+            if not pdf:
+                raise RuntimeError('no se encuentra la noticia del mes')
+            if pdf != data.get('pdf'):
+                raw, headers = await self.get_full(pdf, timeout=120)
+                year, month, rows = LR.parse_leon(DR.pdf_text(raw))
+                data = {'pdf': pdf, 'year': year, 'month': month, 'rows': rows, 'date': S.http_date(headers.get('last-modified', ''))}
+            data['checked'] = now_iso()
+            cache.write_text(json.dumps(data, ensure_ascii=False))
+        rows = [r for r in data['rows'] if (data['year'], data['month'], r['day']) == (today.year, today.month, today.day)]
+        out, missing = [], []
+        for i, r in enumerate(rows):
+            lines, gsrc = await geo.street(LR.expand(r['street']), 'León', LR.LEON_BBOX)
+            if not lines:
+                missing.append(r['street'])
+                continue
+            hours = ('08:00', '15:00') if r['shift'] == 'mañana' else ('15:00', '22:00')
+            out.append(feature(0, 0, {'id': f'leon:{today}:{i}', 'kind': 'anunciado', 'src': 'leon', 'city': 'León',
+                                      'title': r['street'] + (f" ({r['where']})" if r['where'] else ''), 'limit': r['maxspeed'],
+                                      'shift': r['shift'], 'geo': gsrc, 'valid_from': at(hours[0]), 'valid_to': at(hours[1])},
+                                     LR.circles(lines)))
+        self.sources.ok('leon', count=len(data['rows']), data_date=data.get('date', ''),
+                        note=f"{len(rows)} hoy" + (f"; calles no encontradas: {', '.join(missing)}" if missing else ''))
+        return out
+
+    async def fines(self, city: str, geo: LR.Geocoder) -> list[dict]:
+        """Recurring mobile-radar spots from the newest fines file of Barcelona (quarter) or Madrid (month)."""
+        sid = f'{city}_multas'
+        cache = DATA_DIR / f'fines-{city}.json'
+        data = json.loads(cache.read_text()) if cache.exists() else {}
+        if not data or data.get('checked', '') < (dt.datetime.now(dt.UTC) - dt.timedelta(hours=24)).strftime('%Y-%m-%dT%H'):
+            pkg = await self.get(LR.BCN_PKG if city == 'bcn' else LR.MADRID_PKG, accept='application/json', timeout=60)
+            latest = LR.latest_resource(pkg, r'\d{4}_\dt_denuncies.*\.csv' if city == 'bcn' else r'\d{6}detalle\.csv')
+            if not latest:
+                raise RuntimeError('no se encuentra el último fichero de multas')
+            url, name = latest
+            if url != data.get('url'):
+                raw, headers = await self.get_full(url, timeout=600)
+                if city == 'bcn':
+                    spots, info = await asyncio.to_thread(LR.bcn_recurring, LR.text_lines(raw, 'utf-8'))
+                else:
+                    spots, info = await asyncio.to_thread(LR.madrid_recurring, LR.text_lines(raw, 'latin-1'))
+                del raw
+                data = {'url': url, 'name': name, 'spots': spots, 'info': info, 'date': S.http_date(headers.get('last-modified', ''))}
+            data['checked'] = now_iso()
+            cache.write_text(json.dumps(data, ensure_ascii=False))
+        info = data['info']
+        if city == 'bcn':
+            period = (info['from'], info['to'])
+        else:
+            y, m = (int(x) for x in info['month'].split('-'))
+            end = (dt.date(y + m // 12, m % 12 + 1, 1) - dt.timedelta(days=1))
+            period = (f'{y}-{m:02d}-01', end.isoformat())
+        out, missing = [], []
+        for i, sp in enumerate(data['spots']):
+            props = {'id': f"{sid}:{i}", 'kind': 'historico', 'src': sid, 'city': 'Barcelona' if city == 'bcn' else 'Madrid',
+                     'title': f"{sp['street']} {sp.get('num', '')}".strip() if city == 'bcn' else sp['street'],
+                     'place': sp.get('place', ''), 'fines': sp['fines'], 'days': sp.get('days'), 'span_h': sp.get('span_h'),
+                     'hours': ','.join(str(h) for h in sp['hours']), 'valid_from': period[0], 'valid_to': period[1]}
+            if city == 'bcn':
+                lines = [[(sp['lon'], sp['lat'])]]
+                r_km = 0.2
+            else:
+                lines, gsrc = await geo.street(sp['street'], 'Madrid', LR.MADRID_BBOX)
+                if not lines and ' y ' in sp['street'].lower():  # "Camoens y Valero": a junction, try the first street
+                    lines, gsrc = await geo.street(re.split(r'\s+y\s+', sp['street'], flags=re.I)[0], 'Madrid', LR.MADRID_BBOX)
+                if not lines:
+                    missing.append(sp['place'])
+                    continue
+                props['geo'] = gsrc
+                r_km = 0.15
+            g = LR.circles(lines, r_km=r_km)
+            out.append(feature(0, 0, {k: v for k, v in props.items() if v not in (None, '', [])}, g))
+        note = (f"{data['name']}: {len(out)} zonas de {info.get('places', '?')} lugares con multas de velocidad"
+                + (f"; no encontradas: {', '.join(missing)}" if missing else ''))
+        self.sources.ok(sid, count=len(out), data_date=period[1] + 'T23:59:59Z', note=note)
+        return out
 
     async def tolls(self) -> None:
         """Toll roads, toll booths and service areas from the OpenStreetMap extract."""
@@ -611,6 +856,7 @@ class Worker:
             self.every('quakes', 600, self.quakes, delay=15),
             self.every('cameras', 6 * 3600, self.cameras, delay=20),
             self.every('radars', 3 * 3600, self.radars, delay=25),
+            self.every('mobile', 2 * 3600, self.mobile, delay=50),
             self.every('zbe', 24 * 3600, self.zbe, delay=30),
             self.every('tolls', 24 * 3600, self.tolls, delay=35),
             self.every('fires', 1800, self.fires, delay=45),
