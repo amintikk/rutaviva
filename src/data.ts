@@ -11,7 +11,6 @@ export interface Incident {
 }
 export interface Camera { id: string; road: string; km?: number; prov?: string; dest?: string }
 export interface Radar { id: string; kind: 'fijo' | 'tramo' | 'semaforo'; src?: 'dgt' | 'osm'; road?: string; km?: number; km2?: number; len?: number; prov?: string; dir?: string; maxspeed?: number; note?: string }
-export interface Report { id: string; kind: string; label: string; created: string; expires: string; confirmed: string; ups: number; downs: number }
 export interface Panel { id: string; road: string; km?: number; prov?: string; dest?: string; lines: string; picts: string; set?: string; on: boolean }
 export interface Station {
   id: string; brand: string; addr: string; muni: string; prov: string; cp: string; hours: string; side: string; public: boolean;

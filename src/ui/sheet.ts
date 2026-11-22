@@ -15,6 +15,8 @@ export class Sheet {
   private stack: { render: () => void }[] = [];
   private snap: Snap = 'peek';
   onClose: () => void = () => {};
+  /** Increases with every view shown: lets slow views give up if something else opened meanwhile. */
+  stamp = 0;
 
   constructor(parent: HTMLElement) {
     this.el = document.createElement('section');
@@ -41,6 +43,7 @@ export class Sheet {
 
   /** Show content. `push` keeps the previous view for the back button. */
   show(title: string, sub: string, content: HTMLElement | string, opts: { push?: boolean; snap?: Snap; closable?: boolean } = {}): HTMLElement {
+    this.stamp++;
     const render = () => {
       this.titleEl.textContent = title;
       this.subEl.textContent = sub;

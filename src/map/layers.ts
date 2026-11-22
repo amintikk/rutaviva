@@ -3,11 +3,10 @@ import type { ExpressionSpecification, GeoJSONSource, Map as MlMap, MapGeoJSONFe
 import { CATS, live, type Cat, type FC } from '../data.ts';
 import { markerImage, squareImage, type IconName } from '../ui/icons.ts';
 
-export type Group = 'traffic' | 'community' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'vms' | 'zbe' | 'quakes';
+export type Group = 'traffic' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'vms' | 'zbe' | 'quakes';
 
 export const GROUPS: { id: Group; label: string; icon: IconName; color: string; hint: string }[] = [
   { id: 'traffic', label: 'Tráfico', icon: 'alert', color: '#ff3b30', hint: 'Accidentes, cortes, obras, nieve y retenciones' },
-  { id: 'community', label: 'Avisos', icon: 'megaphone', color: '#ff9f0a', hint: 'Radares móviles, controles y más avisados por otros conductores' },
   { id: 'cameras', label: 'Cámaras', icon: 'video', color: '#5856d6', hint: 'Imagen en directo de la DGT' },
   { id: 'radars', label: 'Radares', icon: 'radar', color: '#ff2d55', hint: 'Fijos, de tramo y tramos vigilados' },
   { id: 'fuel', label: 'Gasolineras', icon: 'fuel', color: '#34c759', hint: 'Precio de hoy y su historia' },
@@ -18,20 +17,14 @@ export const GROUPS: { id: Group; label: string; icon: IconName; color: string; 
 ];
 
 // How often each group's data is fetched again while visible (seconds).
-const REFRESH: Record<Group, number> = { community: 60, traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, vms: 180, zbe: 86400, quakes: 600 };
+const REFRESH: Record<Group, number> = { traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, vms: 180, zbe: 86400, quakes: 600 };
 const SOURCES: Record<Group, string[]> = {
-  traffic: ['incidents', 'incident-lines'], community: ['reports'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
+  traffic: ['incidents', 'incident-lines'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
   fuel: ['fuel'], ev: ['ev'], vms: ['vms'], zbe: ['zbe'], quakes: ['quakes'],
 };
 
-export const CLICKABLE = ['report-icon', 'inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
+export const CLICKABLE = ['inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
   'fuel-dot', 'fuel-label', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot'];
-
-// Community warnings: amber ring around the usual colours.
-export const REPORT_STYLE: Record<string, [IconName, string]> = {
-  radar_movil: ['radar', '#ff2d55'], control: ['siren', '#0a5bd8'], accidente: ['car', '#ff3b30'],
-  obstaculo: ['alert', '#e8a400'], atasco: ['gauge', '#ff9f0a'], vehiculo_parado: ['car', '#8e8e93'],
-};
 
 const empty = (): FC => ({ type: 'FeatureCollection', features: [] });
 
@@ -89,7 +82,6 @@ export class Layers {
     add('fuel-pin', markerImage('fuel', '#34c759', 26, 2, ring));
     add('radar-osm', markerImage('radar', '#ff6b8a', 22, 2, ring));
     add('radar-semaforo', markerImage('radar', '#bf5af2', 22, 2, ring));
-    for (const [k, [ic, col]] of Object.entries(REPORT_STYLE)) add(`rep-${k}`, markerImage(ic, col, 32, 2, '#ff9f0a'));
     await Promise.all(jobs);
   }
 
@@ -172,10 +164,6 @@ export class Layers {
       'icon-image': ['concat', 'inc-', ['get', 'cat']], 'icon-allow-overlap': true,
       'symbol-sort-key': catRank, 'icon-size': ['interpolate', ['linear'], ['zoom'], 7.5, 0.8, 12, 1] } });
 
-    // Community warnings on top of everything.
-    add({ id: 'report-icon', type: 'symbol', source: 'reports', layout: { 'icon-image': ['concat', 'rep-', ['get', 'kind']], 'icon-allow-overlap': true,
-      'icon-size': ['interpolate', ['linear'], ['zoom'], 5, 0.65, 10, 0.9, 13, 1] } });
-
     // Selection halo.
     add({ id: 'selection', type: 'circle', source: 'selection', paint: { 'circle-radius': 22, 'circle-color': 'rgba(10,132,255,0.16)', 'circle-stroke-color': '#0a84ff', 'circle-stroke-width': 2.5 } });
     add({ id: 'route-ends', type: 'circle', source: 'route', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 7, 'circle-color': ['case', ['==', ['get', 'end'], 'from'], '#ffffff', '#0a84ff'], 'circle-stroke-color': ['case', ['==', ['get', 'end'], 'from'], '#0a84ff', '#ffffff'], 'circle-stroke-width': 3 } });
@@ -184,7 +172,6 @@ export class Layers {
   private layerIds(g: Group): string[] {
     return {
       traffic: ['inc-lines-casing', 'inc-lines', 'inc-dots-far', 'inc-dots', 'inc-points'],
-      community: ['report-icon'],
       cameras: ['cam-dot', 'cam-icon'],
       radars: ['radar-dot', 'radar-icon', 'radar-sections', 'invive', 'motos'],
       fuel: ['fuel-dot', 'fuel-label'],
@@ -260,7 +247,6 @@ export class Layers {
 export function featureGroup(f: MapGeoJSONFeature): Group | 'ev-live' | null {
   const s = f.source;
   if (s === 'incidents' || s === 'incident-lines') return 'traffic';
-  if (s === 'reports') return 'community';
   if (s === 'cameras') return 'cameras';
   if (s === 'radars' || s === 'radar-sections' || s === 'invive' || s === 'motos') return 'radars';
   if (s === 'fuel') return 'fuel';

@@ -21,7 +21,6 @@ from aiohttp import web
 from . import feeds as F
 from . import fuelhist as H
 from . import osm as O
-from . import reports as R
 from .reve import Reve, ranking, summarize, sweep
 from .store import DATA as DATA_DIR, Meta, collection, db, feature, now_iso, write_json
 
@@ -185,14 +184,6 @@ class Worker:
         cams = await asyncio.to_thread(O.speed_cameras)
         cache.write_text(json.dumps(cams))
         return cams
-
-    def publish_reports(self) -> None:
-        items = R.active(self.con)
-        write_json('reports', collection([feature(x['lon'], x['lat'], {k: v for k, v in x.items() if k not in ('lon', 'lat')})
-                                          for x in items], generated=now_iso()))
-
-    async def reports_tick(self) -> None:
-        self.publish_reports()
 
     async def vms(self) -> None:
         status, loc = await asyncio.gather(self.get(URLS['vms']), self.get(URLS['vms_loc']))
@@ -437,33 +428,6 @@ class Worker:
             raise web.HTTPBadGateway(text=str(err)[:200])
         return web.json_response(summarize(d), headers={'Cache-Control': 'public, max-age=60'})
 
-    def _client(self, request: web.Request) -> str:
-        return request.headers.get('X-Client-Key') or request.remote or ''
-
-    async def api_report(self, request: web.Request) -> web.Response:
-        try:
-            body = await request.json()
-            res = R.add(self.con, str(body.get('kind', '')), float(body['lon']), float(body['lat']), self._client(request))
-        except R.LimitError as e:
-            return web.json_response({'error': str(e)}, status=429)
-        except (KeyError, ValueError, TypeError) as e:
-            return web.json_response({'error': str(e) or 'datos no válidos'}, status=400)
-        self.publish_reports()
-        return web.json_response(res, status=201)
-
-    async def api_vote(self, request: web.Request) -> web.Response:
-        try:
-            body = await request.json()
-            res = R.vote(self.con, request.match_info['id'], bool(body.get('up')), self._client(request))
-        except R.LimitError as e:
-            return web.json_response({'error': str(e)}, status=429)
-        except KeyError:
-            return web.json_response({'error': 'el aviso ya no está activo'}, status=404)
-        except (ValueError, TypeError):
-            return web.json_response({'error': 'datos no válidos'}, status=400)
-        self.publish_reports()
-        return web.json_response(res)
-
     async def api_health(self, _request: web.Request) -> web.Response:
         stale = []
         limits = {'incidents': 900, 'vms': 900, 'fuel': 7200, 'cameras': 86400, 'quakes': 3600}
@@ -483,10 +447,6 @@ class Worker:
         app.router.add_get('/api/fuel/station/{id}', self.api_station)
         app.router.add_get('/api/ev/markers', self.api_ev_markers)
         app.router.add_get('/api/ev/location/{id}', self.api_ev_location)
-        app.router.add_post('/api/reports', self.api_report)
-        app.router.add_post('/api/reports/{id}/vote', self.api_vote)
-        R.ensure(self.con)
-        self.publish_reports()
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         await web.TCPSite(runner, os.environ.get('RUTAVIVA_HOST', '0.0.0.0'), int(os.environ.get('RUTAVIVA_PORT', '8080'))).start()
@@ -500,7 +460,6 @@ class Worker:
             self.every('zbe', 24 * 3600, self.zbe, delay=30),
             self.every('ev', 24 * 3600, self.ev, delay=40),
             self.every('incident_stats', 3600, self.incident_stats, delay=120),
-            self.every('reports', 60, self.reports_tick, delay=3),
             self.every('nightly', 6 * 3600, self.nightly, delay=90),
             self.every('reve_sweep', 0, self.reve_sweep, at_hour=2, delay=300),
         ]

@@ -221,26 +221,6 @@ ul.list button:hover { background: color-mix(in srgb, var(--text) 4%, transparen
 .consent p { margin: 0 0 12px; font-size: 14px; color: var(--text-2); }
 .consent .row { display: flex; justify-content: flex-end; gap: 8px; padding: 0; }
 
-/* ---------------------------------------------------------------- community warnings */
-.fab {
-  position: absolute; z-index: 5; right: 12px; bottom: 64px; display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 18px 0 15px;
-  border-radius: 999px; border: 0; background: linear-gradient(180deg, #ffad33, #ff9500); color: #fff; font-weight: 700; font-size: 15px; cursor: pointer;
-  box-shadow: 0 6px 20px rgba(255, 149, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.2); transition: transform 0.12s ease;
-}
-.fab:active { transform: scale(0.96); }
-.crosshair { position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #ff9500; pointer-events: none; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5)); }
-.crosshair[hidden] { display: none; }
-.rep-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.rep-opt { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 6px; border-radius: 14px; border: 0; cursor: pointer;
-  background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--text); font-size: 13px; font-weight: 600; transition: transform 0.12s ease; }
-.rep-opt svg { color: var(--c); }
-.rep-opt:active { transform: scale(0.96); }
-.rep-opt:disabled { opacity: 0.5; }
-.rep-where { align-self: flex-start; }
-.rep-where button { display: inline-flex; align-items: center; gap: 5px; }
-.warn-text { color: var(--orange) !important; font-weight: 600; }
-.vote { display: flex; gap: 8px; }
-.vote .btn { flex: 1; }
 .speed-sign { margin-left: auto; flex: none; display: grid; place-items: center; width: 50px; height: 50px; border-radius: 50%; background: #fff; border: 6px solid #e0201b; color: #111; font-weight: 800; font-size: 17px; letter-spacing: -0.03em; }
 
 /* ---------------------------------------------------------------- phones */
@@ -264,8 +244,6 @@ ul.list button:hover { background: color-mix(in srgb, var(--text) 4%, transparen
   .sheet-head { padding-top: 6px; touch-action: none; }
   .sheet-title { font-size: 19px; }
   .now-pill { bottom: max(16px, env(safe-area-inset-bottom)); left: 12px; transform: none; }
-  .fab { bottom: max(16px, env(safe-area-inset-bottom)); right: 12px; height: 44px; }
-  .sheet.open ~ .fab { display: none; }
   .maplibregl-ctrl-bottom-right { bottom: 0; }
   .search-list { left: -40px; right: -46px; }
   .cat-grid { grid-template-columns: repeat(3, 1fr); }
