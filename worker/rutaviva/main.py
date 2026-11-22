@@ -20,9 +20,13 @@ from aiohttp import web
 
 from . import feeds as F
 from . import fuelhist as H
+from . import dgt_radares as DR
+from . import enforcement as E
 from . import osm as O
+from . import traffic as TR
+from .pk import PkIndex
 from .reve import Reve, ranking, summarize, sweep
-from .store import DATA as DATA_DIR, Meta, collection, db, feature, now_iso, write_json
+from .store import DATA as DATA_DIR, Meta, collection, db, feature, now_iso, read_json as read_live, write_json
 
 log = logging.getLogger('rutaviva')
 NAP = 'https://nap.dgt.es'
@@ -106,6 +110,11 @@ class Worker:
             a = r['pts'][0]
             props = {k: v for k, v in r.items() if k not in ('pts',) and v not in (None, '', [])}
             props['what'] = ','.join(r['what'])
+            try:
+                started = dt.datetime.fromisoformat(r['start'])
+                props['days'] = max(0, (dt.datetime.now(dt.UTC) - started).days)
+            except (ValueError, TypeError):
+                pass
             points.append(feature(a[0], a[1], props))
             geom = snapped.get(r['id'])
             if geom:
@@ -195,18 +204,63 @@ class Worker:
         return await self.snap([(r['id'], r['pts'], abs(r['km2'] - r['km']) if r.get('km') is not None and r.get('km2') is not None else None)
                                 for r in recs if len(r['pts']) == 2])
 
-    async def osm_cameras(self) -> list[dict]:
-        """Speed cameras from the local OpenStreetMap extract, re-read only when the file changes."""
-        cache = DATA_DIR / 'osm-cameras.json'
+    async def osm_data(self) -> dict:
+        """Enforcement data and kilometre posts from OpenStreetMap, prepared by `python -m rutaviva.osm`
+        (deploy.sh runs it in a separate container whenever the extract changes)."""
+        cache = DATA_DIR / 'osm-enforcement.json'
+        if not cache.exists():
+            log.warning('osm-enforcement.json missing: run ./deploy.sh worker')
+            return {}
+        return await asyncio.to_thread(lambda: json.loads(cache.read_text()))
+
+    async def dgt_lists(self) -> tuple[list[dict], list[dict]]:
+        """The DGT's PDF lists of cameras (report + equipment); the last good copy is kept."""
+        cache = DATA_DIR / 'dgt-radares.json'
         try:
-            mtime = O.PBF.stat().st_mtime
-        except OSError:
-            return json.loads(cache.read_text()) if cache.exists() else []
-        if cache.exists() and cache.stat().st_mtime >= mtime:
-            return json.loads(cache.read_text())
-        cams = await asyncio.to_thread(O.speed_cameras)
-        cache.write_text(json.dumps(cams))
-        return cams
+            html = (await self.get(DR.PAGE, accept='text/html')).decode('utf-8', 'replace')
+            links = DR.pdf_links(html)
+            inf = DR.parse_informe(DR.pdf_text(await self.get(links['informe'], timeout=120)))
+            eq = DR.parse_equipos(DR.pdf_text(await self.get(links['equipos'], timeout=120)))
+            if len([r for r in inf if r['kind'] == 'fijo']) < 400:
+                raise RuntimeError(f'informe con solo {len(inf)} filas')
+            cache.write_text(json.dumps({'informe': inf, 'equipos': eq, 'links': links, 'at': now_iso()}))
+            return inf, eq
+        except Exception as e:  # noqa: BLE001 - fall back to the last list that worked
+            log.warning('dgt lists: %s', e)
+            if cache.exists():
+                d = json.loads(cache.read_text())
+                return d['informe'], d['equipos']
+            raise
+
+    async def city_traffic(self) -> None:
+        results = await asyncio.gather(self.get(TR.MADRID), self.get(TR.BCN_STATE), self.bcn_sections(), return_exceptions=True)
+        feats, notes = [], []
+        if not isinstance(results[0], BaseException):
+            stamp, pts = TR.madrid(results[0])
+            feats += [feature(p['lon'], p['lat'], {k: v for k, v in p.items() if k not in ('lon', 'lat')} | {'city': 'Madrid'}) for p in pts]
+            notes.append(f'Madrid {len(pts)} ({stamp})')
+        else:
+            notes.append(f'Madrid: {results[0]}')
+        if not isinstance(results[1], BaseException) and not isinstance(results[2], BaseException):
+            stamp, secs = TR.barcelona(results[2], results[1])
+            feats += [feature(0, 0, {k: v for k, v in x.items() if k != 'line'} | {'city': 'Barcelona'},
+                              {'type': 'LineString', 'coordinates': x['line']}) for x in secs]
+            notes.append(f'Barcelona {len(secs)} ({stamp})')
+        else:
+            notes.append(f'Barcelona: {results[1] if isinstance(results[1], BaseException) else results[2]}')
+        if not feats:
+            raise RuntimeError('; '.join(notes))
+        write_json('traffic', collection(feats, generated=now_iso()))
+        self.meta.ok('traffic', len(feats), '; '.join(notes))
+
+    async def bcn_sections(self) -> bytes:
+        """Barcelona's section geometries change rarely: cached for a day."""
+        cache = DATA_DIR / 'bcn-trams.csv'
+        if cache.exists() and time.time() - cache.stat().st_mtime < 86400:
+            return cache.read_bytes()
+        data = await self.get(TR.BCN_SECTIONS)
+        cache.write_bytes(data)
+        return data
 
     async def vms(self) -> None:
         status, loc = await asyncio.gather(self.get(URLS['vms']), self.get(URLS['vms_loc']))
@@ -229,25 +283,47 @@ class Worker:
 
     async def radars(self) -> None:
         rad, inv, mot = await asyncio.gather(self.get(URLS['radars']), self.get(URLS['invive']), self.get(URLS['motos']))
-        rs = F.radars(rad)
-        for r in rs:
-            r['src'] = 'dgt'
-        extra: list[dict] = []
-        osm_cams = await self.osm_cameras()
-        if osm_cams:
-            rs, extra = O.merge(rs, osm_cams)
-        pts = [feature(r['lon'], r['lat'], {k: v for k, v in r.items() if k not in ('lon', 'lat', 'line') and v is not None})
-               for r in rs]
-        pts += [feature(o['lon'], o['lat'], {'id': o['id'], 'kind': o['kind'], 'src': 'osm', 'maxspeed': o['maxspeed'],
-                                             'dir': o['direction'], 'note': o['note']}) for o in extra]
-        snapped = await self.snap([(f"radar:{r['id']}", r['line'], r.get('len')) for r in rs if r.get('line')], budget=100, keep_short=99)
-        tramos = [feature(0, 0, {'id': r['id'], 'road': r['road'], 'km': r['km'], 'km2': r.get('km2'), 'len': r.get('len')},
-                          {'type': 'LineString', 'coordinates': snapped.get(f"radar:{r['id']}") or [list(p) for p in r['line']]})
-                  for r in rs if r.get('line')]
+        nap = F.radars(rad)
+        osm = await self.osm_data()
+        informe, equipos = await self.dgt_lists()
+        stretches = {'invive': F.stretches(inv), 'motos': F.stretches(mot)}
+        # Reference points "road + km -> position" to place the DGT lists.
+        index = PkIndex()
+        for k, d, lon, lat in osm.get('milestones', []):
+            index.roads.setdefault(k, []).append((d, lon, lat))
+        for r in nap:
+            index.add(r['road'], r['km'], r['lon'], r['lat'])
+        for name in ('cameras', 'vms'):
+            for f in (read_live(name) or {}).get('features', []):
+                p = f['properties']
+                index.add(p.get('road', ''), p.get('km'), *f['geometry']['coordinates'])
+        for road, km, lon, lat in self.con.execute("SELECT road, km, lon, lat FROM incident WHERE src='dgt' AND km IS NOT NULL"):
+            index.add(road, km, lon, lat)
+        for st in stretches.values():
+            for x in st:
+                if x['km'] is not None and len(x['line']) >= 2:
+                    index.add(x['road'], x['km'], *x['line'][0])
+                    if x['km2'] is not None:
+                        index.add(x['road'], x['km2'], *x['line'][-1])
+        index.finish()
+
+        async def route(a, b):
+            try:
+                return await self._route(a, b, 80, shortest=True)
+            except Exception:  # noqa: BLE001
+                return None
+
+        points, sections = await E.build(informe, equipos, nap, osm, index, route,
+                                         lambda items: self.snap(items, budget=300, keep_short=99))
+        pts = [feature(p['lon'], p['lat'], {k: v for k, v in p.items() if k not in ('lon', 'lat') and v not in (None, '')}) for p in points]
+        secs = [feature(0, 0, {k: v for k, v in s.items() if k != 'lines' and v not in (None, '')},
+                        {'type': 'MultiLineString', 'coordinates': s['lines']}) for s in sections]
         write_json('radars', collection(pts, generated=now_iso()))
-        write_json('radar-sections', collection(tramos))
-        for name, blob in (('invive', inv), ('motos', mot)):
-            st = F.stretches(blob)
+        write_json('radar-sections', collection(secs))
+        counts = Counter((p['src'], p['kind']) for p in points)
+        approx = sum(1 for p in points if p.get('pos') == 'aproximada')
+        self.meta.ok('radars', len(points), ', '.join(f'{k[0]} {k[1]}: {v}' for k, v in sorted(counts.items())) + f'; aproximadas: {approx}')
+        for name, st in stretches.items():
             span = lambda x: abs(x['km2'] - x['km']) if x.get('km') is not None and x.get('km2') is not None else None  # noqa: E731
             snapped = await self.snap([(f"{name}:{x['id']}", x['line'], span(x)) for x in st if len(x['line']) == 2],
                                       budget=2000, keep_short=1.0)
@@ -262,7 +338,6 @@ class Worker:
                     feats.append(feature(0, 0, {**props, 'ends': True},
                                          {'type': 'MultiPoint', 'coordinates': [list(x['line'][0]), list(x['line'][-1])]}))
             write_json(name, collection(feats))
-        self.meta.ok('radars', len(pts), f'{len(rs)} DGT + {len(extra)} OpenStreetMap')
 
     async def zbe(self) -> None:
         index = (await self.get(URLS['zbe_index'])).decode('utf-8', 'replace')
@@ -461,7 +536,7 @@ class Worker:
 
     async def api_health(self, _request: web.Request) -> web.Response:
         stale = []
-        limits = {'incidents': 900, 'vms': 900, 'fuel': 7200, 'cameras': 86400, 'quakes': 3600}
+        limits = {'incidents': 900, 'vms': 900, 'traffic': 1800, 'fuel': 7200, 'cameras': 86400, 'quakes': 3600}
         for feed, lim in limits.items():
             st = self.meta.state.get(feed) or {}
             upd = st.get('updated')
@@ -484,6 +559,7 @@ class Worker:
         tasks = [
             self.every('incidents', 180, self.incidents),
             self.every('vms', 180, self.vms, delay=5),
+            self.every('traffic', 300, self.city_traffic, delay=8),
             self.every('fuel', 1800, self.fuel, delay=10),
             self.every('quakes', 600, self.quakes, delay=15),
             self.every('cameras', 6 * 3600, self.cameras, delay=20),

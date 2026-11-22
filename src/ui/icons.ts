@@ -149,6 +149,11 @@ export async function radarImage(speed: number, kind: string, dark: boolean, rat
     ctx.stroke();
     await glyph(kind === 'tramo' ? 'section' : kind === 'semaforo' ? 'lights' : 'cctv', bx, by, br * 1.25, '#ffffff', 2.6);
   } else {
+    const look: Record<string, [string, IconName]> = {
+      tramo: ['#0a84ff', 'section'], semaforo: ['#8e44ad', 'lights'], cinturon: ['#0f9d8a', 'cctv'],
+      linea: ['#f08a24', 'minus'], stop: ['#b3261e', 'closed'],
+    };
+    const [color, ic] = look[kind] ?? ['#e0201b', 'cctv'];
     ctx.beginPath();
     ctx.arc(px / 2, px / 2, r, 0, Math.PI * 2);
     ctx.fillStyle = dark ? '#1c1c1e' : '#ffffff';
@@ -156,9 +161,9 @@ export async function radarImage(speed: number, kind: string, dark: boolean, rat
     ctx.shadowColor = 'transparent';
     ctx.beginPath();
     ctx.arc(px / 2, px / 2, r - 1.8 * ratio, 0, Math.PI * 2);
-    ctx.fillStyle = kind === 'tramo' ? '#0a84ff' : kind === 'semaforo' ? '#8e44ad' : '#e0201b';
+    ctx.fillStyle = color;
     ctx.fill();
-    await glyph(kind === 'tramo' ? 'section' : 'cctv', px / 2, px / 2, r * 1.15, '#ffffff', 2.4);
+    await glyph(ic, px / 2, px / 2, r * 1.15, '#ffffff', 2.4);
   }
   return ctx.getImageData(0, 0, px, px);
 }

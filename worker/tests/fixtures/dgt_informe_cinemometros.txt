@@ -1,0 +1,40 @@
+PROVINCIA   CARRETERA   TIPO                     PK       SENTIDO       FECHA_ACTUALIZACION_INFORME
+Albacete    A-31        Radar Fijo            50.601      Creciente                         03/08/2026
+Albacete    A-31        Radar Fijo           127.006      Creciente                         03/08/2026
+Albacete    A-31        Radar Fijo           137.894      Decreciente                       03/08/2026
+Albacete    CM-220      Radar Móvil     17.300 - 34.800   Ambos                             03/08/2026
+Albacete    CM-3106     Radar Móvil     19.390 - 32.390   Ambos                             03/08/2026
+Albacete    CM-3106     Radar Móvil     36.140 - 59.350   Ambos                             03/08/2026
+Albacete    CM-3121     Radar Móvil      0.000 - 30.870   Ambos                             03/08/2026
+Albacete    CM-313      Radar Móvil     33.117 - 65.100   Ambos                             03/08/2026
+Albacete    CM-313      Radar Móvil    65.100 - 127.430   Ambos                             03/08/2026
+Albacete    CM-3135     Radar Móvil      0.000 - 16.890   Ambos                             03/08/2026
+Albacete    CM-3135     Radar Móvil     17.830 - 37.400   Ambos                             03/08/2026
+Albacete    CM-320      Radar Móvil      5.210 - 24.300   Ambos                             03/08/2026
+Albacete    CM-3211     Radar Móvil     19.070 - 29.910   Ambos                             03/08/2026
+Albacete    CM-3212     Radar Móvil      0.000 - 10.280   Ambos                             03/08/2026
+Albacete    CM-3213     Radar Móvil      0.020 - 30.220   Ambos                             03/08/2026
+Albacete    CM-3215     Radar Móvil      0.610 - 17.090   Ambos                             03/08/2026
+Albacete    CM-3218     Radar Móvil      8.080 - 11.880   Ambos                             03/08/2026
+Albacete    CM-3222     Radar Móvil      0.050 - 17.960   Ambos                             03/08/2026
+Albacete    CM-3226     Radar Móvil      0.930 - 21.960   Ambos                             03/08/2026
+Albacete    CM-332      Radar Móvil      0.000 - 56.010   Ambos                             03/08/2026
+Albacete    CM-400      Radar Móvil     20.100 - 44.070   Ambos                             03/08/2026
+Albacete    CM-412      Radar Móvil   158.850 - 168.520   Ambos                             03/08/2026
+Albacete    CM-412      Radar Móvil   170.770 - 272.750   Ambos                             03/08/2026
+Albacete    CM-412      Radar Tramo            202.5      Decreciente                       03/08/2026
+                                            (5.638 m)
+Albacete    CM-412      Radar Tramo           208.15      Creciente                         03/08/2026
+                                            (5.336 m)
+Albacete    CM-412      Radar Móvil   274.610 - 344.680   Ambos                             03/08/2026
+Albacete    N-301       Radar Móvil   257.160 - 274.770   Ambos                             03/08/2026
+Albacete    N-301       Radar Móvil   277.510 - 300.900   Ambos                             03/08/2026
+Albacete    N-301       Radar Móvil   303.300 - 337.450   Ambos                             03/08/2026
+Albacete    N-310       Radar Móvil   121.180 - 144.990   Ambos                             03/08/2026
+Albacete    N-310       Radar Fijo            126.39      Creciente                         03/08/2026
+Albacete    N-322       Radar Fijo           315.988      Creciente                         03/08/2026
+Albacete    N-322       Radar Fijo           327.274      Decreciente                       03/08/2026
+Albacete    N-322       Radar Móvil   268.680 - 289.520   Ambos                             03/08/2026
+Albacete    N-322       Radar Móvil   316.290 - 347.100   Ambos                             03/08/2026
+Albacete    N-322       Radar Móvil   356.920 - 395.380   Ambos                             03/08/2026
+Albacete    N-322       Radar Fijo             367.1      Creciente                         03/08/2026

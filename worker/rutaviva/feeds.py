@@ -87,6 +87,17 @@ def incidents(data: bytes, src: str) -> list[Rec]:
         cat = classify(f'{kind} {values}')
         if cat == 'otro' and 'allLanesCompleteCarriageway' in values and 'mandatory' in values:
             cat = 'cerrada'  # a bare lane-management record over the whole carriageway is a cut
+        closure = ''
+        if 'roadClosed' in values:
+            closure = 'carretera'
+        elif 'carriagewayClosures' in values:
+            closure = 'calzada'
+        elif 'laneClosures' in values:
+            closure = 'carril'
+        # Roadworks that close one carriageway are roadworks (often for weeks), not a road cut.
+        if cat == 'cerrada' and closure != 'carretera' and ('roadworks' in values or 'maintenanceWorks' in kind
+                                                            or 'roadMaintenance' in values):
+            cat = 'obras'
         # A full closure for roadworks is shown as a closure, not as roadworks.
         what = sorted({t for t in values.split() if _KEEP.match(t)})
         road = text(r, 'roadName') or text(r, 'roadNumber') or descriptor(r, 'linkName')
@@ -110,6 +121,7 @@ def incidents(data: bytes, src: str) -> list[Rec]:
             'end': text(r, 'overallEndTime'),
             'sev': sev,
             'what': what,
+            'closure': closure,
             'txt': ' · '.join(dict.fromkeys(c for c in comments if c.upper() != road.upper()))[:400],
             # DATEX lists the "to" point before the "from" point; keep [from, to].
             'pts': [pts[1], pts[0]] if len(pts) >= 2 and pts[1] != pts[0] else [pts[0]],

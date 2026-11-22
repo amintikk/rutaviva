@@ -6,7 +6,7 @@ import { markerImage, radarImage, squareImage, type IconName } from '../ui/icons
 export type Group = 'traffic' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'vms' | 'zbe' | 'quakes';
 
 export const GROUPS: { id: Group; label: string; icon: IconName; color: string; hint: string }[] = [
-  { id: 'traffic', label: 'Tráfico', icon: 'alert', color: '#ff3b30', hint: 'Accidentes, cortes, obras, nieve y retenciones' },
+  { id: 'traffic', label: 'Tráfico', icon: 'alert', color: '#ff3b30', hint: 'Accidentes, cortes, obras, nieve y atascos en Madrid y Barcelona' },
   { id: 'cameras', label: 'Cámaras', icon: 'video', color: '#5856d6', hint: 'Imagen en directo de la DGT' },
   { id: 'radars', label: 'Radares', icon: 'cctv', color: '#ff2d55', hint: 'Fijos, de tramo y tramos vigilados' },
   { id: 'fuel', label: 'Gasolineras', icon: 'fuel', color: '#34c759', hint: 'Precio de hoy y su historia' },
@@ -19,11 +19,11 @@ export const GROUPS: { id: Group; label: string; icon: IconName; color: string; 
 // How often each group's data is fetched again while visible (seconds).
 const REFRESH: Record<Group, number> = { traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, vms: 180, zbe: 86400, quakes: 600 };
 const SOURCES: Record<Group, string[]> = {
-  traffic: ['incidents', 'incident-lines'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
+  traffic: ['incidents', 'incident-lines', 'traffic'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
   fuel: ['fuel'], ev: ['ev'], vms: ['vms'], zbe: ['zbe'], quakes: ['quakes'],
 };
 
-export const CLICKABLE = ['inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
+export const CLICKABLE = ['traffic-lines', 'traffic-dots', 'inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
   'fuel-dot', 'fuel-label', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot', 'invive-ends', 'motos-ends'];
 
 const empty = (): FC => ({ type: 'FeatureCollection', features: [] });
@@ -128,11 +128,23 @@ export class Layers {
     // Stretches without a reliable road geometry: just their two ends.
     add({ id: 'invive-ends', type: 'circle', source: 'invive', minzoom: 7, filter: ['==', ['geometry-type'], 'MultiPoint'], paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 6], 'circle-color': '#ff2d55', 'circle-opacity': 0.45, 'circle-stroke-color': '#ff2d55', 'circle-stroke-width': 1.5 } }, before);
     add({ id: 'motos-ends', type: 'circle', source: 'motos', minzoom: 7, filter: ['==', ['geometry-type'], 'MultiPoint'], paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 6], 'circle-color': '#af52de', 'circle-opacity': 0.45, 'circle-stroke-color': '#af52de', 'circle-stroke-width': 1.5 } }, before);
-    add({ id: 'radar-sections', type: 'line', source: 'radar-sections', layout: { 'line-cap': 'round' }, paint: { 'line-color': '#ff2d55', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2, 12, 6], 'line-dasharray': [1.5, 1] } }, before);
+    add({ id: 'radar-sections', type: 'line', source: 'radar-sections', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: {
+      'line-color': '#0a84ff', 'line-opacity': ['case', ['==', ['get', 'pos'], 'aproximada'], 0.45, 0.85],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2, 12, 6] } }, before);
 
     // Route on top of the base roads.
     add({ id: 'route-casing', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': this.dark ? '#0b3d91' : '#0a4fc2', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 6, 14, 13] } }, before);
     add({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0a84ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 14, 9] } }, before);
+
+    // Live congestion where cities publish it (Madrid sensors, Barcelona sections).
+    const tcolor: ExpressionSpecification = ['match', ['get', 'state'], 1, '#30c15a', 2, '#ffcc00', 3, '#ff9500', 4, '#ff3b30', 5, '#7a0b0b', '#8e8e93'];
+    add({ id: 'traffic-lines', type: 'line', source: 'traffic', minzoom: 10, filter: ['==', ['geometry-type'], 'LineString'],
+      layout: { 'line-cap': 'round', 'line-join': 'round', 'line-sort-key': ['get', 'state'] },
+      paint: { 'line-color': tcolor, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 15, 7], 'line-opacity': 0.9 } }, before);
+    add({ id: 'traffic-dots', type: 'circle', source: 'traffic', minzoom: 10, filter: ['==', ['geometry-type'], 'Point'],
+      layout: { 'circle-sort-key': ['get', 'state'] },
+      paint: { 'circle-color': tcolor, 'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, ['match', ['get', 'state'], 1, 1.4, 3], 15, ['match', ['get', 'state'], 1, 3.5, 6.5]],
+        'circle-stroke-color': halo, 'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 11, 0, 14, 1], 'circle-opacity': ['match', ['get', 'state'], 1, 0.7, 1] } }, before);
 
     // Affected stretches of road.
     add({ id: 'inc-lines-casing', type: 'line', source: 'incident-lines', minzoom: 8, layout: { 'line-cap': 'round' }, paint: { 'line-color': halo, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 12] } }, before);
@@ -162,7 +174,7 @@ export class Layers {
 
     // Radars.
     add({ id: 'radar-dot', type: 'circle', source: 'radars', minzoom: 5, maxzoom: 9, paint: {
-      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 9, 3.6], 'circle-color': ['case', ['==', ['get', 'src'], 'osm'], '#ff6b8a', '#ff2d55'],
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 9, 3.6], 'circle-color': ['match', ['get', 'kind'], 'tramo', '#0a84ff', 'semaforo', '#8e44ad', 'cinturon', '#0f9d8a', 'linea', '#f08a24', 'stop', '#b3261e', '#e0201b'],
       'circle-stroke-color': halo, 'circle-stroke-width': 0.8 } });
     // Speed-limit sign markers, drawn on demand for each limit and kind (see installRadarImages).
     add({ id: 'radar-icon', type: 'symbol', source: 'radars', minzoom: 9, layout: {
@@ -184,7 +196,9 @@ export class Layers {
       'circle-color': catColor, 'circle-stroke-color': halo, 'circle-stroke-width': 1.2 } });
     add({ id: 'inc-points', type: 'symbol', source: 'incidents', minzoom: 7.5, layout: {
       'icon-image': ['concat', 'inc-', ['get', 'cat']], 'icon-allow-overlap': true,
-      'symbol-sort-key': catRank, 'icon-size': ['interpolate', ['linear'], ['zoom'], 7.5, 0.8, 12, 1] } });
+      'symbol-sort-key': catRank,
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 7.5, ['case', ['>=', ['coalesce', ['get', 'days'], 0], 7], 0.62, 0.8], 12, ['case', ['>=', ['coalesce', ['get', 'days'], 0], 7], 0.78, 1]] },
+      paint: { 'icon-opacity': ['case', ['>=', ['coalesce', ['get', 'days'], 0], 7], 0.6, 1] } });
 
     // Selection halo.
     add({ id: 'selection', type: 'circle', source: 'selection', paint: { 'circle-radius': 22, 'circle-color': 'rgba(10,132,255,0.16)', 'circle-stroke-color': '#0a84ff', 'circle-stroke-width': 2.5 } });
@@ -193,7 +207,7 @@ export class Layers {
 
   private layerIds(g: Group): string[] {
     return {
-      traffic: ['inc-lines-casing', 'inc-lines', 'inc-dots-far', 'inc-dots', 'inc-points'],
+      traffic: ['traffic-lines', 'traffic-dots', 'inc-lines-casing', 'inc-lines', 'inc-dots-far', 'inc-dots', 'inc-points'],
       cameras: ['cam-dot', 'cam-icon'],
       radars: ['radar-dot', 'radar-icon', 'radar-sections', 'invive', 'motos', 'invive-ends', 'motos-ends'],
       fuel: ['fuel-dot', 'fuel-label'],
@@ -220,13 +234,18 @@ export class Layers {
   }
 
   async load(g: Group): Promise<void> {
+    let ok = 0;
     await Promise.all(SOURCES[g].map(async (name) => {
-      const fc = await live<FC>(name, REFRESH[g] / 2);
+      // One missing source (e.g. a city feed that is down) must not hide the rest of the layer.
+      const fc = await live<FC>(name, REFRESH[g] / 2).catch(() => null);
+      if (!fc) return;
+      ok++;
       if (name === 'radars') await this.radarImages(fc);
       this.data.set(name, fc);
       (this.map.getSource(name) as GeoJSONSource | undefined)?.setData(fc);
       this.onData(name, fc);
     }));
+    if (!ok) throw new Error(`${g}: sin datos`);
     if (g === 'fuel') this.applyFuel();
   }
 
@@ -269,7 +288,7 @@ export class Layers {
 
 export function featureGroup(f: MapGeoJSONFeature): Group | 'ev-live' | null {
   const s = f.source;
-  if (s === 'incidents' || s === 'incident-lines') return 'traffic';
+  if (s === 'incidents' || s === 'incident-lines' || s === 'traffic') return 'traffic';
   if (s === 'cameras') return 'cameras';
   if (s === 'radars' || s === 'radar-sections' || s === 'invive' || s === 'motos') return 'radars';
   if (s === 'fuel') return 'fuel';

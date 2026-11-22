@@ -1,0 +1,38 @@
+            LISTADO DE EQUIPOS AUTOMÁTICOS DE DETECCIÓN DE INFRACCIONES
+PROVINCIA               CARRETERA             PK          SENTIDO         EQUIPO
+ALBACETE                   A30               57,35           D            Cinturón
+ALBACETE                   A31               72,3            D            Cinturón
+ALBACETE                   A31               158,2           D            Cinturón
+ALBACETE                   A35               1,45            D            Cinturón
+ALBACETE                  N344              118,136          C            Cinturón
+ALICANTE                    A31                 185,8        D            Cinturón
+ALICANTE                    A7               525,9           C            Cinturón
+ALICANTE                    A7               514,2           D            Cinturón
+ALICANTE                    A70              29,56           C            Cinturón
+ALICANTE                   N338              2,94            C            Cinturón
+ALICANTE                   N340              713,2           D            Cinturón
+ALMERÍA                   A1000                0             D            Cinturón
+ALMERÍA                    A391               5,1            D            Cinturón
+ALMERÍA                     A7              781,925          C            Cinturón
+ALMERÍA                   AL3301              0,1            D            Cinturón
+ALMERÍA                   N340A              448,8           D            Cinturón
+ALMERÍA                   N340A              448,8           C            Cinturón
+ALMERÍA                    N344              13,8            D            Cinturón
+ASTURIAS                    A66              33,85           C            Cinturón
+ASTURIAS                    A66              48,7            D            Cinturón
+ASTURIAS                    A8              401,05           D            Cinturón
+ASTURIAS                    A8              385,125          C            Cinturón
+ASTURIAS                   AI81                0             C            Cinturón
+ASTURIAS                   AI81               1,9            D            Cinturón
+ASTURIAS                  AS266                5             D            Cinturón
+ASTURIAS                   N632             98,738           D            Cinturón
+  ÁVILA                     A6              128,25           D            Cinturón
+BADAJOZ                    N430              84,5            D            Cinturón
+  CUENCA                CM220              68.68           C            Video Stop
+  MADRID                   A1                   15.95        D            Línea Contínua
+  MADRID                   A2                    11.8        D            Línea Contínua
+  MADRID                   A42                   16.9        D            Línea Contínua
+  MADRID                   A6                    20.2        D            Línea Contínua
+  MADRID                  M222                  13.95        C              Video Stop
+  SEGOVIA               N603               62.9           C            Foto Rojo
+  SEGOVIA                NVI               63.2           C            Foto Rojo

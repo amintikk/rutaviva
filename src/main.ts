@@ -202,6 +202,7 @@ function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, l
   const p = props as never;
   switch (kind) {
     case 'incident': D.incident(ctx, p, lon, lat); break;
+    case 'congestion': D.congestion(ctx, p); break;
     case 'camera': D.camera(ctx, p, lon, lat, push); break;
     case 'radar': D.radar(ctx, p, lon, lat); break;
     case 'stretch': D.stretch(ctx, props, 'stretch'); break;
@@ -216,7 +217,7 @@ function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, l
   track('detail', { kind });
 }
 
-const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'radar-sections', 'motos', 'invive', 'motos-ends', 'invive-ends', 'zbe-fill'];
+const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'traffic-lines', 'traffic-dots', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'radar-sections', 'motos', 'invive', 'motos-ends', 'invive-ends', 'zbe-fill'];
 map.on('click', (e) => {
   const pad = mobile ? 12 : 6;
   const feats = map.queryRenderedFeatures([[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]], { layers: CLICKABLE.filter((l) => map.getLayer(l)) });
@@ -226,7 +227,7 @@ map.on('click', (e) => {
   const g = featureGroup(f);
   const props = { ...(f.properties as Record<string, unknown>) };
   const pt = f.geometry.type === 'Point' ? (f.geometry.coordinates as [number, number]) : [e.lngLat.lng, e.lngLat.lat] as [number, number];
-  const kind: D.Kind | null = g === 'traffic' ? 'incident' : g === 'cameras' ? 'camera' : g === 'radars'
+  const kind: D.Kind | null = g === 'traffic' ? (f.source === 'traffic' ? 'congestion' : 'incident') : g === 'cameras' ? 'camera' : g === 'radars'
     ? (f.source === 'invive' ? 'stretch' : f.source === 'motos' ? 'motos' : 'radar')
     : g === 'fuel' ? 'fuel' : g === 'ev' ? 'ev' : g === 'ev-live' ? 'evlive' : g === 'vms' ? 'vms' : g === 'zbe' ? 'zbe' : g === 'quakes' ? 'quake' : null;
   if (kind === 'radar' && f.source === 'radar-sections') props.kind = 'tramo';
@@ -286,6 +287,20 @@ async function showSummary(fromBoot = false): Promise<void> {
     grid.append(b);
   }
   el.append(grid);
+  const recent = feats.filter((f) => ((f.properties as { days?: number }).days ?? 0) < 1).length;
+  const longrun = feats.filter((f) => ((f.properties as { days?: number }).days ?? 0) >= 7).length;
+  const jam = (layers.get('traffic')?.features ?? []).filter((f) => ((f.properties as { state?: number }).state ?? 0) >= 3);
+  const jamCity = (c: string) => jam.filter((f) => (f.properties as { city?: string }).city === c).length;
+  const info = document.createElement('p');
+  info.className = 'muted small';
+  info.innerHTML = `<b>${nf.format(recent)}</b> avisos nuevos en las últimas 24 h · ${nf.format(longrun)} de larga duración (más de una semana, se ven atenuados).`;
+  el.append(info);
+  if (layers.get('traffic')) {
+    const jams = document.createElement('p');
+    jams.className = 'row now-jams';
+    jams.innerHTML = `${iconSvg('gauge', 16)}<span>Ahora, tramos muy densos o con congestión: <b>${nf.format(jamCity('Madrid'))}</b> en Madrid y <b>${nf.format(jamCity('Barcelona'))}</b> en Barcelona.</span>`;
+    el.append(jams);
+  }
   const extras = document.createElement('div');
   extras.className = 'now-extras';
   const fuelFc = layers.get('fuel') as FC | undefined;

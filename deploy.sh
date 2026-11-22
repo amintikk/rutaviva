@@ -14,6 +14,11 @@ rsync -a --delete dist/ "$TARGET/data/html/"
 if [ "${1:-}" = worker ]; then
   (cd worker && .venv/bin/python -m pytest -q tests)
   docker build -q -t "rutaviva-worker:$(git rev-parse --short HEAD 2>/dev/null || date +%s)" -t rutaviva-worker:current worker
+  # OpenStreetMap enforcement data: only when the extract changed (needs ~1.7 GB for ~3 min).
+  pbf="$TARGET/valhalla/spain-latest.osm.pbf"; cache="$TARGET/data/worker/osm-enforcement.json"
+  if [ -f "$pbf" ] && { [ ! -f "$cache" ] || [ "$pbf" -nt "$cache" ]; }; then
+    docker run --rm --memory 3g -v "$TARGET/data/worker:/data" -v "$pbf:/osm/spain-latest.osm.pbf:ro" rutaviva-worker:current python -m rutaviva.osm
+  fi
 fi
 
 changed=0

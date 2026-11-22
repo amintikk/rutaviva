@@ -2,7 +2,7 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import {
   ago, CATS, esc, FUEL_LABEL, FUELS, km, nf, price, SRC, titleCase, when, WHAT,
-  type Camera, type Cat, type Charger, type FC, type Incident, type Panel, type Quake, type Radar, type Station, type Zone,
+  TRAFFIC_STATE, type Camera, type Cat, type Charger, type Congestion, type FC, type Incident, type Panel, type Quake, type Radar, type Station, type Zone,
 } from '../data.ts';
 import type { Layers } from '../map/layers.ts';
 import { lineChart } from './chart.ts';
@@ -16,7 +16,7 @@ export interface Ctx {
   open: (kind: Kind, props: Record<string, unknown>, lon: number, lat: number, push?: boolean) => void;
   routeTo: (lon: number, lat: number, label: string) => void;
 }
-export type Kind = 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake';
+export type Kind = 'congestion' | 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake';
 
 const h = (html: string): HTMLElement => {
   const d = document.createElement('div');
@@ -104,11 +104,14 @@ export function incident(ctx: Ctx, p: Incident, lon: number, lat: number): void 
   const what = (p.what ?? '').split(',').filter((w) => w && WHAT[w] && !['mandatory', 'anyVehicle', 'unknown'].includes(w));
   const place = [titleCase(p.muni), titleCase(p.prov)].filter(Boolean).join(', ');
   const kms = p.km != null ? (p.km2 != null ? `del km ${nf.format(Math.min(p.km, p.km2))} al ${nf.format(Math.max(p.km, p.km2))}` : km(p.km)) : '';
-  const el = h(`<div class="hero">${badge(c.icon, c.color)}<div><p class="kicker" style="color:${c.color}">${esc(c.label)}</p>
+  const closure = p.closure === 'carretera' ? 'Carretera cortada' : p.closure === 'calzada' ? 'Calzada cortada en un sentido' : p.closure === 'carril' ? 'Carriles cortados' : '';
+  const old = (p.days ?? 0) >= 7;
+  const el = h(`<div class="hero">${badge(c.icon, c.color)}<div><p class="kicker" style="color:${c.color}">${esc(c.label)}${closure && p.cat !== 'cerrada' ? ` · ${esc(closure)}` : ''}</p>
     <p class="big">${esc(p.road || 'Vía sin nombre')} ${kms ? `<span class="muted">${esc(kms)}</span>` : ''}</p>
     ${place ? `<p class="muted">${esc(place)}</p>` : ''}</div></div>
     ${what.length ? `<div class="chips">${what.map((w) => `<span class="chip">${esc(WHAT[w])}</span>`).join('')}</div>` : ''}
     ${p.txt ? `<p class="note">${esc(titleCase(p.txt))}</p>` : ''}
+    ${old ? `<p class="muted small">Aviso de larga duración: lleva ${p.days} días publicado.</p>` : ''}
     <div class="rows">
       ${p.start ? row('clock', `Desde ${esc(when(p.start))} <span class="muted">(${esc(ago(p.start))})</span>`) : ''}
       ${p.end ? row('calendar', `Previsto hasta ${esc(when(p.end))}`) : ''}
@@ -172,10 +175,19 @@ export function camera(ctx: Ctx, p: Camera, lon: number, lat: number, push = fal
 
 // ---------------------------------------------------------------- radars and stretches
 
+const RADAR_KIND: Record<string, { title: string; icon: IconName; color: string; text: string }> = {
+  fijo: { title: 'Radar fijo', icon: 'cctv', color: '#e0201b', text: 'Mide la velocidad instantánea al pasar.' },
+  tramo: { title: 'Radar de tramo', icon: 'section', color: '#0a84ff', text: 'Mide la velocidad media entre dos puntos: frenar solo ante la cámara no sirve.' },
+  semaforo: { title: 'Cámara de semáforo en rojo', icon: 'lights', color: '#8e44ad', text: 'Fotografía a los vehículos que cruzan con el semáforo en rojo.' },
+  cinturon: { title: 'Cámara de cinturón y móvil', icon: 'cctv', color: '#0f9d8a', text: 'Cámara de la DGT que detecta a quien circula sin cinturón o usando el móvil al volante.' },
+  linea: { title: 'Cámara de línea continua', icon: 'minus', color: '#f08a24', text: 'Detecta los adelantamientos y cambios de carril pisando la línea continua.' },
+  stop: { title: 'Cámara de stop', icon: 'closed', color: '#b3261e', text: 'Detecta a quien no se detiene en la señal de stop.' },
+};
+
 export function radar(ctx: Ctx, p: Radar, lon: number, lat: number): void {
+  const k = RADAR_KIND[p.kind] ?? RADAR_KIND.fijo!;
   const tramo = p.kind === 'tramo';
   const osm = p.src === 'osm';
-  const title = tramo ? 'Radar de tramo' : p.kind === 'semaforo' ? 'Radar de semáforo' : 'Radar fijo';
   const compass = (d: string) => {
     const n = Number(d);
     if (Number.isNaN(n)) return d;
@@ -183,17 +195,19 @@ export function radar(ctx: Ctx, p: Radar, lon: number, lat: number): void {
   };
   const dirText = !p.dir ? '' : p.dir === 'positive' ? 'Sentido creciente de la kilometración' : p.dir === 'negative' ? 'Sentido decreciente de la kilometración'
     : p.dir === 'bothWays' ? 'Ambos sentidos' : /^\d+$/.test(p.dir) ? `Controla a quien circula hacia el ${compass(p.dir)}` : p.dir;
-  const el = h(`<div class="hero">${badge(tramo ? 'section' : 'cctv', tramo ? '#0a84ff' : p.kind === 'semaforo' ? '#8e44ad' : '#e0201b')}<div>
-    <p class="kicker" style="color:#ff2d55">${title}</p>
-    <p class="big">${esc(p.road || (osm ? 'Vía urbana o sin identificar' : ''))} <span class="muted">${tramo && p.km != null && p.km2 != null ? `km ${nf.format(p.km)} a ${nf.format(p.km2)}` : esc(km(p.km))}</span></p>
+  const kmText = tramo && p.km != null && p.km2 != null ? `km ${nf.format(Math.min(p.km, p.km2))} a ${nf.format(Math.max(p.km, p.km2))}` : km(p.km);
+  const el = h(`<div class="hero">${badge(k.icon, k.color)}<div>
+    <p class="kicker" style="color:${k.color}">${esc(k.title)}</p>
+    <p class="big">${esc(p.road || (osm ? 'Vía urbana o sin identificar' : ''))} <span class="muted">${esc(kmText)}</span></p>
     ${p.prov ? `<p class="muted">${esc(titleCase(p.prov))}</p>` : ''}</div>
     ${p.maxspeed ? `<span class="speed-sign" aria-label="Límite ${p.maxspeed} km/h">${p.maxspeed}</span>` : ''}</div>
-    ${p.note ? `<p class="note">${esc(p.note)}</p>` : ''}
-    <div class="rows">${tramo && p.len ? row('gauge', `Mide la velocidad media en <b>${nf.format(p.len)} km</b>`) : ''}
+    <p class="note">${esc(k.text)}${p.note ? ` ${esc(p.note)}` : ''}</p>
+    ${p.pos === 'aproximada' ? '<p class="warn">Posición aproximada: la DGT lo publica por punto kilométrico y lo hemos situado sobre la carretera (margen habitual de unos cientos de metros).</p>' : ''}
+    <div class="rows">${tramo && p.len ? row('gauge', `Tramo de <b>${nf.format(p.len)} km</b>`) : ''}
     ${dirText ? row('road', esc(dirText)) : ''}
-    ${row('info', osm ? 'Ubicación aportada por la comunidad de OpenStreetMap; puede no estar en la lista oficial de la DGT o pertenecer a un ayuntamiento o comunidad autónoma.' : 'Ubicación publicada por la DGT. Una cabina puede estar vacía; los radares móviles y de helicóptero no se publican.')}</div>`);
-  el.append(actions(ctx, lon, lat, `${title} ${p.road ?? ''}`, false));
-  ctx.sheet.show(title, [p.road, km(p.km), osm ? 'OpenStreetMap' : 'DGT'].filter(Boolean).join(' · '), el);
+    ${row('info', osm ? 'Fuente: comunidad de OpenStreetMap. Puede ser de un ayuntamiento, de una comunidad autónoma o no estar en las listas de la DGT.' : 'Fuente: listado oficial de la DGT de equipos y tramos de vigilancia.')}</div>`);
+  el.append(actions(ctx, lon, lat, `${k.title} ${p.road ?? ''}`, false));
+  ctx.sheet.show(k.title, [p.road, km(p.km), osm ? 'OpenStreetMap' : 'DGT'].filter(Boolean).join(' · '), el);
 }
 
 export function stretch(ctx: Ctx, p: Record<string, unknown>, kind: 'stretch' | 'motos'): void {
@@ -432,4 +446,16 @@ export function incidentList(ctx: Ctx, feats: GeoJSON.Feature[]): HTMLElement {
     ul.append(li);
   }
   return ul;
+}
+
+// ---------------------------------------------------------------- city congestion
+
+export function congestion(ctx: Ctx, p: Congestion): void {
+  const [label, color] = TRAFFIC_STATE[p.state] ?? ['Sin datos', '#8e8e93'];
+  const el = h(`<div class="hero">${badge('gauge', color)}<div><p class="kicker" style="color:${color}">${esc(label)}</p>
+    <p class="big">${esc(p.name || 'Tramo urbano')}</p><p class="muted">${esc(p.city)}</p></div></div>
+    <div class="rows">${p.load != null && p.city === 'Madrid' ? row('gauge', `Carga de la vía: <b>${p.load} %</b>`) : ''}
+    ${p.flow ? row('car', `Intensidad: <b>${nf.format(p.flow)}</b> vehículos/hora`) : ''}
+    ${row('info', p.city === 'Madrid' ? 'Sensores del Ayuntamiento de Madrid (Informo), cada 5 minutos.' : 'Estado del tráfico del Ayuntamiento de Barcelona, cada 5 minutos.')}</div>`);
+  ctx.sheet.show(`Tráfico: ${label.toLowerCase()}`, p.city, el);
 }

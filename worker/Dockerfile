@@ -3,8 +3,8 @@ FROM python:3.13-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 RUTAVIVA_DATA=/data
 WORKDIR /app
 COPY requirements.txt .
-# libexpat1: needed by osmium to read the OpenStreetMap extract.
-RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 && rm -rf /var/lib/apt/lists/* \
+# libexpat1: osmium (OpenStreetMap extract); poppler-utils: pdftotext for the DGT camera lists.
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 poppler-utils && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir $(grep -v '^pytest' requirements.txt) && useradd -u 1000 -m rv
 COPY rutaviva ./rutaviva
 USER 1000

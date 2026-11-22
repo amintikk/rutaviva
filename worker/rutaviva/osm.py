@@ -1,33 +1,107 @@
-"""Speed cameras mapped by the OpenStreetMap community, read from the Spain extract that Valhalla
-already uses (no extra download). They complete the DGT list, which leaves out Catalonia, the
-Basque Country, municipal and red-light cameras, and add the speed limit the DGT omits."""
+"""What the OpenStreetMap community maps about road enforcement, read from the Spain extract that
+Valhalla already uses (no extra download):
+
+- speed cameras (`highway=speed_camera`), with their speed limit and direction;
+- average-speed sections (`type=enforcement` + `enforcement=average_speed`), with the exact road
+  geometry of the section and its limit;
+- red-light cameras (`enforcement=traffic_signals` / `red_light_camera`);
+- kilometre posts (`highway=milestone` with `ref` and `distance`), used to place the DGT's
+  "road + kilometre" lists on the map.
+"""
 from __future__ import annotations
 
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 PBF = Path(os.environ.get('RUTAVIVA_OSM_PBF', '/osm/spain-latest.osm.pbf'))
 
 
-def speed_cameras(pbf: Path = PBF) -> list[dict[str, Any]]:
+def road_key(ref: str) -> str:
+    """Comparable road name: "A-31", "A31" and "a 31" are the same road; "EX-A1" == "EXA1"."""
+    return re.sub(r'[^A-Z0-9]', '', ref.upper())
+
+
+def _num(s: str | None) -> float | None:
+    if not s:
+        return None
+    m = re.match(r'^\s*(\d+(?:[.,]\d+)?)', s)
+    return float(m.group(1).replace(',', '.')) if m else None
+
+
+def read(pbf: Path = PBF) -> dict[str, Any]:
     import osmium  # imported lazily: only this job needs it
 
-    out = []
-    fp = osmium.FileProcessor(str(pbf), osmium.osm.NODE).with_filter(osmium.filter.TagFilter(('highway', 'speed_camera')))
-    for n in fp:
-        t = {tag.k: tag.v for tag in n.tags}
-        ms = t.get('maxspeed', '')
-        out.append({
-            'id': f'osm:{n.id}', 'lon': round(n.location.lon, 6), 'lat': round(n.location.lat, 6),
-            'maxspeed': int(ms) if ms.isdigit() else None,
-            'direction': t.get('direction', ''),
-            'note': (t.get('note') or t.get('description') or '')[:160],
-            'kind': 'semaforo' if 'traffic_signals' in t.get('enforcement', '') or 'semáforo' in t.get('note', '').lower() or 'semaforo' in t.get('note', '').lower() else 'fijo',
-            'temporary': t.get('temporary') == 'yes',
+    cams: list[dict[str, Any]] = []
+    milestones: list[tuple[str, float, float, float]] = []
+    lights: list[dict[str, Any]] = []
+    # Pass 1: nodes we need directly (cameras, milestones).
+    for n in osmium.FileProcessor(str(pbf), osmium.osm.NODE).with_filter(osmium.filter.KeyFilter('highway')):
+        hw = n.tags.get('highway')
+        if hw == 'speed_camera':
+            t = {tag.k: tag.v for tag in n.tags}
+            ms = t.get('maxspeed', '')
+            note = (t.get('note') or t.get('description') or '')
+            cams.append({
+                'id': f'osm:{n.id}', 'lon': round(n.location.lon, 6), 'lat': round(n.location.lat, 6),
+                'maxspeed': int(ms) if ms.isdigit() else None, 'direction': t.get('direction', ''), 'note': note[:160],
+                'kind': 'semaforo' if 'semáforo' in note.lower() or 'semaforo' in note.lower() else 'fijo',
+                'temporary': t.get('temporary') == 'yes',
+            })
+        elif hw == 'milestone':
+            d = _num(n.tags.get('distance') or n.tags.get('pk'))
+            ref = n.tags.get('ref') or n.tags.get('highway:ref') or ''
+            if d is not None and ref:
+                for r in ref.split(';'):
+                    milestones.append((road_key(r), d, round(n.location.lon, 6), round(n.location.lat, 6)))
+    # Pass 2: enforcement relations and the members we need to resolve.
+    rels = []
+    need_nodes: set[int] = set()
+    need_ways: set[int] = set()
+    for r in osmium.FileProcessor(str(pbf), osmium.osm.RELATION).with_filter(osmium.filter.TagFilter(('type', 'enforcement'))):
+        enf = r.tags.get('enforcement', '')
+        if enf not in ('average_speed', 'traffic_signals', 'red_light_camera'):
+            continue
+        members = [(m.type, m.role, m.ref) for m in r.members]
+        rels.append({'id': r.id, 'enf': enf, 'tags': {t.k: t.v for t in r.tags}, 'members': members})
+        for typ, _role, ref in members:
+            (need_nodes if typ == 'n' else need_ways if typ == 'w' else set()).add(ref)
+    way_nodes: dict[int, list[int]] = {}
+    way_ref: dict[int, str] = {}
+    if need_ways:
+        for w in osmium.FileProcessor(str(pbf), osmium.osm.WAY).with_filter(osmium.filter.IdFilter(need_ways)):
+            way_nodes[w.id] = [nd.ref for nd in w.nodes]
+            way_ref[w.id] = w.tags.get('ref', '')
+            need_nodes.update(way_nodes[w.id])
+    loc: dict[int, tuple[float, float]] = {}
+    if need_nodes:
+        for n in osmium.FileProcessor(str(pbf), osmium.osm.NODE).with_filter(osmium.filter.IdFilter(need_nodes)):
+            loc[n.id] = (round(n.location.lon, 6), round(n.location.lat, 6))
+    sections: list[dict[str, Any]] = []
+    for r in rels:
+        pts = {role: loc.get(ref) for typ, role, ref in r['members'] if typ == 'n' and role in ('from', 'to')}
+        devices = [loc[ref] for typ, role, ref in r['members'] if typ == 'n' and role == 'device' and ref in loc]
+        if r['enf'] != 'average_speed':
+            for d in devices or [p for p in pts.values() if p]:
+                lights.append({'id': f"osmrel:{r['id']}", 'lon': d[0], 'lat': d[1], 'kind': 'semaforo'})
+            continue
+        lines = [[loc[n] for n in way_nodes.get(ref, []) if n in loc] for typ, role, ref in r['members'] if typ == 'w' and role == 'section']
+        refs = sorted({way_ref.get(ref, '') for typ, role, ref in r['members'] if typ == 'w'} - {''})
+        frm, to = pts.get('from'), pts.get('to')
+        if not frm or not to:
+            continue
+        sections.append({
+            'id': f"osmrel:{r['id']}", 'from': frm, 'to': to, 'lines': [ln for ln in lines if len(ln) > 1],
+            'maxspeed': int(r['tags']['maxspeed']) if r['tags'].get('maxspeed', '').isdigit() else None,
+            'road': refs[0].split(';')[0] if refs else '', 'note': (r['tags'].get('description') or r['tags'].get('name') or '')[:160],
         })
-    return out
+    return {'cameras': cams, 'milestones': milestones, 'sections': sections, 'lights': lights}
+
+
+def speed_cameras(pbf: Path = PBF) -> list[dict[str, Any]]:
+    return read(pbf)['cameras']
 
 
 def _km(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -56,3 +130,16 @@ def merge(dgt: list[dict[str, Any]], osm: list[dict[str, Any]], radius_km: float
                 r['maxspeed'] = best['maxspeed']
     extra = [o for o in osm if o['id'] not in matched and not o.get('temporary')]
     return dgt, extra
+
+
+if __name__ == '__main__':
+    # One-off job (deploy.sh runs it in its own container when the extract changes): it needs
+    # ~1.7 GB for a couple of minutes, more than the long-running worker should hold.
+    import json
+    import sys
+    out = Path(sys.argv[1] if len(sys.argv) > 1 else '/data/osm-enforcement.json')
+    data = read()
+    tmp = out.with_suffix('.tmp')
+    tmp.write_text(json.dumps(data))
+    tmp.replace(out)
+    print({k: len(v) for k, v in data.items()})
