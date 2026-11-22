@@ -20,8 +20,10 @@ from aiohttp import web
 
 from . import feeds as F
 from . import fuelhist as H
+from . import osm as O
+from . import reports as R
 from .reve import Reve, ranking, summarize, sweep
-from .store import Meta, collection, db, feature, now_iso, write_json
+from .store import DATA as DATA_DIR, Meta, collection, db, feature, now_iso, write_json
 
 log = logging.getLogger('rutaviva')
 NAP = 'https://nap.dgt.es'
@@ -171,6 +173,27 @@ class Worker:
     async def snap_lines(self, recs: list[dict]) -> dict[str, list[list[float]]]:
         return await self.snap([(r['id'], r['pts']) for r in recs if len(r['pts']) == 2])
 
+    async def osm_cameras(self) -> list[dict]:
+        """Speed cameras from the local OpenStreetMap extract, re-read only when the file changes."""
+        cache = DATA_DIR / 'osm-cameras.json'
+        try:
+            mtime = O.PBF.stat().st_mtime
+        except OSError:
+            return json.loads(cache.read_text()) if cache.exists() else []
+        if cache.exists() and cache.stat().st_mtime >= mtime:
+            return json.loads(cache.read_text())
+        cams = await asyncio.to_thread(O.speed_cameras)
+        cache.write_text(json.dumps(cams))
+        return cams
+
+    def publish_reports(self) -> None:
+        items = R.active(self.con)
+        write_json('reports', collection([feature(x['lon'], x['lat'], {k: v for k, v in x.items() if k not in ('lon', 'lat')})
+                                          for x in items], generated=now_iso()))
+
+    async def reports_tick(self) -> None:
+        self.publish_reports()
+
     async def vms(self) -> None:
         status, loc = await asyncio.gather(self.get(URLS['vms']), self.get(URLS['vms_loc']))
         panels = F.vms(status, loc)
@@ -193,8 +216,16 @@ class Worker:
     async def radars(self) -> None:
         rad, inv, mot = await asyncio.gather(self.get(URLS['radars']), self.get(URLS['invive']), self.get(URLS['motos']))
         rs = F.radars(rad)
+        for r in rs:
+            r['src'] = 'dgt'
+        extra: list[dict] = []
+        osm_cams = await self.osm_cameras()
+        if osm_cams:
+            rs, extra = O.merge(rs, osm_cams)
         pts = [feature(r['lon'], r['lat'], {k: v for k, v in r.items() if k not in ('lon', 'lat', 'line') and v is not None})
                for r in rs]
+        pts += [feature(o['lon'], o['lat'], {'id': o['id'], 'kind': o['kind'], 'src': 'osm', 'maxspeed': o['maxspeed'],
+                                             'dir': o['direction'], 'note': o['note']}) for o in extra]
         snapped = await self.snap([(f"radar:{r['id']}", r['line']) for r in rs if r.get('line')], budget=100, keep_short=99)
         tramos = [feature(0, 0, {'id': r['id'], 'road': r['road'], 'km': r['km'], 'km2': r.get('km2'), 'len': r.get('len')},
                           {'type': 'LineString', 'coordinates': snapped.get(f"radar:{r['id']}") or [list(p) for p in r['line']]})
@@ -209,7 +240,7 @@ class Worker:
                                                  {'type': 'LineString' if len(x['line']) > 1 else 'Point',
                                                   'coordinates': snapped.get(f"{name}:{x['id']}") or ([list(p) for p in x['line']]
                                                   if len(x['line']) > 1 else list(x['line'][0]))}) for x in st]))
-        self.meta.ok('radars', len(rs))
+        self.meta.ok('radars', len(pts), f'{len(rs)} DGT + {len(extra)} OpenStreetMap')
 
     async def zbe(self) -> None:
         index = (await self.get(URLS['zbe_index'])).decode('utf-8', 'replace')
@@ -406,6 +437,33 @@ class Worker:
             raise web.HTTPBadGateway(text=str(err)[:200])
         return web.json_response(summarize(d), headers={'Cache-Control': 'public, max-age=60'})
 
+    def _client(self, request: web.Request) -> str:
+        return request.headers.get('X-Client-Key') or request.remote or ''
+
+    async def api_report(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+            res = R.add(self.con, str(body.get('kind', '')), float(body['lon']), float(body['lat']), self._client(request))
+        except R.LimitError as e:
+            return web.json_response({'error': str(e)}, status=429)
+        except (KeyError, ValueError, TypeError) as e:
+            return web.json_response({'error': str(e) or 'datos no válidos'}, status=400)
+        self.publish_reports()
+        return web.json_response(res, status=201)
+
+    async def api_vote(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+            res = R.vote(self.con, request.match_info['id'], bool(body.get('up')), self._client(request))
+        except R.LimitError as e:
+            return web.json_response({'error': str(e)}, status=429)
+        except KeyError:
+            return web.json_response({'error': 'el aviso ya no está activo'}, status=404)
+        except (ValueError, TypeError):
+            return web.json_response({'error': 'datos no válidos'}, status=400)
+        self.publish_reports()
+        return web.json_response(res)
+
     async def api_health(self, _request: web.Request) -> web.Response:
         stale = []
         limits = {'incidents': 900, 'vms': 900, 'fuel': 7200, 'cameras': 86400, 'quakes': 3600}
@@ -425,6 +483,10 @@ class Worker:
         app.router.add_get('/api/fuel/station/{id}', self.api_station)
         app.router.add_get('/api/ev/markers', self.api_ev_markers)
         app.router.add_get('/api/ev/location/{id}', self.api_ev_location)
+        app.router.add_post('/api/reports', self.api_report)
+        app.router.add_post('/api/reports/{id}/vote', self.api_vote)
+        R.ensure(self.con)
+        self.publish_reports()
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         await web.TCPSite(runner, os.environ.get('RUTAVIVA_HOST', '0.0.0.0'), int(os.environ.get('RUTAVIVA_PORT', '8080'))).start()
@@ -438,6 +500,7 @@ class Worker:
             self.every('zbe', 24 * 3600, self.zbe, delay=30),
             self.every('ev', 24 * 3600, self.ev, delay=40),
             self.every('incident_stats', 3600, self.incident_stats, delay=120),
+            self.every('reports', 60, self.reports_tick, delay=3),
             self.every('nightly', 6 * 3600, self.nightly, delay=90),
             self.every('reve_sweep', 0, self.reve_sweep, at_hour=2, delay=300),
         ]

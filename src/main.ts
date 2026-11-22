@@ -14,6 +14,7 @@ import { initConsent, track } from './ui/consent.ts';
 import * as D from './ui/details.ts';
 import { icon, iconSvg } from './ui/icons.ts';
 import { Planner } from './ui/route.ts';
+import { openReporter } from './ui/report.ts';
 import { SearchBox, type Candidate, type Place } from './ui/search.ts';
 import { Sheet } from './ui/sheet.ts';
 import { isDark, readTheme, setTheme } from './ui/theme.ts';
@@ -24,7 +25,7 @@ maplibregl.addProtocol('pmtiles', protocol.tile);
 
 const params = new URLSearchParams(location.search);
 const LS = 'rutaviva-layers';
-const DEFAULT: Group[] = ['traffic', 'cameras', 'radars'];
+const DEFAULT: Group[] = ['traffic', 'community', 'cameras', 'radars'];
 function savedLayers(): Group[] {
   const q = params.get('capas');
   if (q) return q.split(',').filter((g): g is Group => GROUPS.some((x) => x.id === g));
@@ -164,6 +165,20 @@ pill.className = 'now-pill glass';
 pill.innerHTML = `<span class="live-dot"></span><span class="now-text">Cargando…</span>`;
 pill.addEventListener('click', () => showSummary());
 app.append(pill);
+
+// Floating "Avisar" button: community warnings.
+const fab = document.createElement('button');
+fab.type = 'button';
+fab.className = 'fab';
+fab.setAttribute('aria-label', 'Avisar a otros conductores');
+fab.innerHTML = `${iconSvg('megaphone', 20, '#fff', 2.2)}<span>Avisar</span>`;
+fab.addEventListener('click', () => {
+  pill.hidden = true;
+  if (!active.has('community')) void toggle('community', true);
+  openReporter(map, sheet, app, () => void layers.load('community'));
+  track('report_open');
+});
+app.append(fab);
 sheet.onClose = () => {
   layers.select(null);
   pill.hidden = false;
@@ -196,9 +211,11 @@ async function toggle(g: Group, on = !active.has(g)): Promise<void> {
 
 function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, lat: number, push = false): void {
   pill.hidden = true;
+  document.querySelector('.crosshair')?.remove();
   layers.select({ lon, lat });
   const p = props as never;
   switch (kind) {
+    case 'report': D.report(ctx, p, lon, lat, () => void layers.load('community')); break;
     case 'incident': D.incident(ctx, p, lon, lat); break;
     case 'camera': D.camera(ctx, p, lon, lat, push); break;
     case 'radar': D.radar(ctx, p, lon, lat); break;
@@ -214,7 +231,7 @@ function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, l
   track('detail', { kind });
 }
 
-const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'radar-sections', 'motos', 'invive', 'zbe-fill'];
+const PRIORITY = ['report-icon', 'inc-points', 'inc-dots', 'inc-dots-far', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'radar-sections', 'motos', 'invive', 'zbe-fill'];
 map.on('click', (e) => {
   const pad = mobile ? 12 : 6;
   const feats = map.queryRenderedFeatures([[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]], { layers: CLICKABLE.filter((l) => map.getLayer(l)) });
@@ -224,7 +241,7 @@ map.on('click', (e) => {
   const g = featureGroup(f);
   const props = { ...(f.properties as Record<string, unknown>) };
   const pt = f.geometry.type === 'Point' ? (f.geometry.coordinates as [number, number]) : [e.lngLat.lng, e.lngLat.lat] as [number, number];
-  const kind: D.Kind | null = g === 'traffic' ? 'incident' : g === 'cameras' ? 'camera' : g === 'radars'
+  const kind: D.Kind | null = g === 'community' ? 'report' : g === 'traffic' ? 'incident' : g === 'cameras' ? 'camera' : g === 'radars'
     ? (f.source === 'invive' ? 'stretch' : f.source === 'motos' ? 'motos' : 'radar')
     : g === 'fuel' ? 'fuel' : g === 'ev' ? 'ev' : g === 'ev-live' ? 'evlive' : g === 'vms' ? 'vms' : g === 'zbe' ? 'zbe' : g === 'quakes' ? 'quake' : null;
   if (kind === 'radar' && f.source === 'radar-sections') props.kind = 'tramo';

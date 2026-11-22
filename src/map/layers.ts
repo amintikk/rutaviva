@@ -3,10 +3,11 @@ import type { ExpressionSpecification, GeoJSONSource, Map as MlMap, MapGeoJSONFe
 import { CATS, live, type Cat, type FC } from '../data.ts';
 import { markerImage, squareImage, type IconName } from '../ui/icons.ts';
 
-export type Group = 'traffic' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'vms' | 'zbe' | 'quakes';
+export type Group = 'traffic' | 'community' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'vms' | 'zbe' | 'quakes';
 
 export const GROUPS: { id: Group; label: string; icon: IconName; color: string; hint: string }[] = [
   { id: 'traffic', label: 'Tráfico', icon: 'alert', color: '#ff3b30', hint: 'Accidentes, cortes, obras, nieve y retenciones' },
+  { id: 'community', label: 'Avisos', icon: 'megaphone', color: '#ff9f0a', hint: 'Radares móviles, controles y más avisados por otros conductores' },
   { id: 'cameras', label: 'Cámaras', icon: 'video', color: '#5856d6', hint: 'Imagen en directo de la DGT' },
   { id: 'radars', label: 'Radares', icon: 'radar', color: '#ff2d55', hint: 'Fijos, de tramo y tramos vigilados' },
   { id: 'fuel', label: 'Gasolineras', icon: 'fuel', color: '#34c759', hint: 'Precio de hoy y su historia' },
@@ -17,14 +18,20 @@ export const GROUPS: { id: Group; label: string; icon: IconName; color: string; 
 ];
 
 // How often each group's data is fetched again while visible (seconds).
-const REFRESH: Record<Group, number> = { traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, vms: 180, zbe: 86400, quakes: 600 };
+const REFRESH: Record<Group, number> = { community: 60, traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, vms: 180, zbe: 86400, quakes: 600 };
 const SOURCES: Record<Group, string[]> = {
-  traffic: ['incidents', 'incident-lines'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
+  traffic: ['incidents', 'incident-lines'], community: ['reports'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
   fuel: ['fuel'], ev: ['ev'], vms: ['vms'], zbe: ['zbe'], quakes: ['quakes'],
 };
 
-export const CLICKABLE = ['inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
+export const CLICKABLE = ['report-icon', 'inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
   'fuel-dot', 'fuel-label', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot'];
+
+// Community warnings: amber ring around the usual colours.
+export const REPORT_STYLE: Record<string, [IconName, string]> = {
+  radar_movil: ['radar', '#ff2d55'], control: ['siren', '#0a5bd8'], accidente: ['car', '#ff3b30'],
+  obstaculo: ['alert', '#e8a400'], atasco: ['gauge', '#ff9f0a'], vehiculo_parado: ['car', '#8e8e93'],
+};
 
 const empty = (): FC => ({ type: 'FeatureCollection', features: [] });
 
@@ -80,6 +87,9 @@ export class Layers {
     add('ev-dc', markerImage('zap', '#00a6a6', 26, 2, ring));
     add('ev-ac', markerImage('plug', '#4aa8a8', 24, 2, ring));
     add('fuel-pin', markerImage('fuel', '#34c759', 26, 2, ring));
+    add('radar-osm', markerImage('radar', '#ff6b8a', 22, 2, ring));
+    add('radar-semaforo', markerImage('radar', '#bf5af2', 22, 2, ring));
+    for (const [k, [ic, col]] of Object.entries(REPORT_STYLE)) add(`rep-${k}`, markerImage(ic, col, 32, 2, '#ff9f0a'));
     await Promise.all(jobs);
   }
 
@@ -132,12 +142,19 @@ export class Layers {
 
     // Cameras and panels: square markers.
     add({ id: 'cam-dot', type: 'circle', source: 'cameras', minzoom: 6.5, maxzoom: 9, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 9, 3.4], 'circle-color': '#5856d6', 'circle-stroke-color': halo, 'circle-stroke-width': 0.8 } });
-    add({ id: 'cam-icon', type: 'symbol', source: 'cameras', minzoom: 9, layout: { 'icon-image': 'cam', 'icon-allow-overlap': ['step', ['zoom'], false, 12, true], 'icon-padding': 1 } });
+    add({ id: 'cam-icon', type: 'symbol', source: 'cameras', minzoom: 9, layout: { 'icon-image': 'cam', 'icon-allow-overlap': true, 'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.75, 12, 1] } });
     add({ id: 'vms-icon', type: 'symbol', source: 'vms', minzoom: 7, filter: ['==', ['get', 'on'], true], layout: { 'icon-image': 'vms', 'icon-allow-overlap': ['step', ['zoom'], false, 11, true], 'icon-size': ['interpolate', ['linear'], ['zoom'], 7, 0.7, 11, 1] } });
 
     // Radars.
-    add({ id: 'radar-dot', type: 'circle', source: 'radars', minzoom: 6, maxzoom: 9, paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 2, 9, 3.6], 'circle-color': '#ff2d55', 'circle-stroke-color': halo, 'circle-stroke-width': 0.8 } });
-    add({ id: 'radar-icon', type: 'symbol', source: 'radars', minzoom: 9, layout: { 'icon-image': ['case', ['==', ['get', 'kind'], 'tramo'], 'radar-tramo', 'radar-fijo'], 'icon-allow-overlap': ['step', ['zoom'], false, 12, true] } });
+    add({ id: 'radar-dot', type: 'circle', source: 'radars', minzoom: 5, maxzoom: 9, paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 9, 3.6], 'circle-color': ['case', ['==', ['get', 'src'], 'osm'], '#ff6b8a', '#ff2d55'],
+      'circle-stroke-color': halo, 'circle-stroke-width': 0.8 } });
+    add({ id: 'radar-icon', type: 'symbol', source: 'radars', minzoom: 9, layout: {
+      'icon-image': ['case', ['==', ['get', 'kind'], 'tramo'], 'radar-tramo', ['==', ['get', 'kind'], 'semaforo'], 'radar-semaforo', ['==', ['get', 'src'], 'osm'], 'radar-osm', 'radar-fijo'],
+      'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      'text-field': ['step', ['zoom'], '', 12, ['to-string', ['coalesce', ['get', 'maxspeed'], '']]], 'text-font': ['Noto Sans Medium'], 'text-size': 11,
+      'text-offset': [1.35, 0], 'text-anchor': 'left', 'text-optional': true },
+      paint: { 'text-color': '#ff2d55', 'text-halo-color': halo, 'text-halo-width': 2 } });
 
     // Earthquakes.
     add({ id: 'quake-dot', type: 'circle', source: 'quakes', paint: {
@@ -152,8 +169,12 @@ export class Layers {
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, ['case', ['<=', catRank, 3], 4, 2.4], 7.5, ['case', ['<=', catRank, 3], 6, 4]],
       'circle-color': catColor, 'circle-stroke-color': halo, 'circle-stroke-width': 1.2 } });
     add({ id: 'inc-points', type: 'symbol', source: 'incidents', minzoom: 7.5, layout: {
-      'icon-image': ['concat', 'inc-', ['get', 'cat']], 'icon-allow-overlap': ['step', ['zoom'], false, 11, true],
+      'icon-image': ['concat', 'inc-', ['get', 'cat']], 'icon-allow-overlap': true,
       'symbol-sort-key': catRank, 'icon-size': ['interpolate', ['linear'], ['zoom'], 7.5, 0.8, 12, 1] } });
+
+    // Community warnings on top of everything.
+    add({ id: 'report-icon', type: 'symbol', source: 'reports', layout: { 'icon-image': ['concat', 'rep-', ['get', 'kind']], 'icon-allow-overlap': true,
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 5, 0.65, 10, 0.9, 13, 1] } });
 
     // Selection halo.
     add({ id: 'selection', type: 'circle', source: 'selection', paint: { 'circle-radius': 22, 'circle-color': 'rgba(10,132,255,0.16)', 'circle-stroke-color': '#0a84ff', 'circle-stroke-width': 2.5 } });
@@ -163,6 +184,7 @@ export class Layers {
   private layerIds(g: Group): string[] {
     return {
       traffic: ['inc-lines-casing', 'inc-lines', 'inc-dots-far', 'inc-dots', 'inc-points'],
+      community: ['report-icon'],
       cameras: ['cam-dot', 'cam-icon'],
       radars: ['radar-dot', 'radar-icon', 'radar-sections', 'invive', 'motos'],
       fuel: ['fuel-dot', 'fuel-label'],
@@ -238,6 +260,7 @@ export class Layers {
 export function featureGroup(f: MapGeoJSONFeature): Group | 'ev-live' | null {
   const s = f.source;
   if (s === 'incidents' || s === 'incident-lines') return 'traffic';
+  if (s === 'reports') return 'community';
   if (s === 'cameras') return 'cameras';
   if (s === 'radars' || s === 'radar-sections' || s === 'invive' || s === 'motos') return 'radars';
   if (s === 'fuel') return 'fuel';

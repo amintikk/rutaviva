@@ -28,6 +28,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./data/worker:/data
+      # OpenStreetMap extract shared with Valhalla (speed cameras), read-only.
+      - ./valhalla/spain-latest.osm.pbf:/osm/spain-latest.osm.pbf:ro
     networks: [internal]
     mem_limit: 2g
     logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}

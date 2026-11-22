@@ -2,7 +2,7 @@
 import type { Map as MlMap } from 'maplibre-gl';
 import {
   ago, CATS, esc, FUEL_LABEL, FUELS, km, nf, price, SRC, titleCase, when, WHAT,
-  type Camera, type Cat, type Charger, type FC, type Incident, type Panel, type Quake, type Radar, type Station, type Zone,
+  type Camera, type Cat, type Charger, type FC, type Incident, type Panel, type Quake, type Radar, type Report, type Station, type Zone,
 } from '../data.ts';
 import type { Layers } from '../map/layers.ts';
 import { lineChart } from './chart.ts';
@@ -16,7 +16,7 @@ export interface Ctx {
   open: (kind: Kind, props: Record<string, unknown>, lon: number, lat: number, push?: boolean) => void;
   routeTo: (lon: number, lat: number, label: string) => void;
 }
-export type Kind = 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake';
+export type Kind = 'report' | 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake';
 
 const h = (html: string): HTMLElement => {
   const d = document.createElement('div');
@@ -174,15 +174,26 @@ export function camera(ctx: Ctx, p: Camera, lon: number, lat: number, push = fal
 
 export function radar(ctx: Ctx, p: Radar, lon: number, lat: number): void {
   const tramo = p.kind === 'tramo';
-  const el = h(`<div class="hero">${badge(tramo ? 'gauge' : 'radar', '#ff2d55')}<div>
-    <p class="kicker" style="color:#ff2d55">${tramo ? 'Radar de tramo' : 'Radar fijo'}</p>
-    <p class="big">${esc(p.road)} <span class="muted">${tramo && p.km != null && p.km2 != null ? `km ${nf.format(p.km)} a ${nf.format(p.km2)}` : esc(km(p.km))}</span></p>
-    ${p.prov ? `<p class="muted">${esc(titleCase(p.prov))}</p>` : ''}</div></div>
+  const osm = p.src === 'osm';
+  const title = tramo ? 'Radar de tramo' : p.kind === 'semaforo' ? 'Radar de semáforo' : 'Radar fijo';
+  const compass = (d: string) => {
+    const n = Number(d);
+    if (Number.isNaN(n)) return d;
+    return ['norte', 'noreste', 'este', 'sureste', 'sur', 'suroeste', 'oeste', 'noroeste'][Math.round(((n % 360) + 360) % 360 / 45) % 8];
+  };
+  const dirText = !p.dir ? '' : p.dir === 'positive' ? 'Sentido creciente de la kilometración' : p.dir === 'negative' ? 'Sentido decreciente de la kilometración'
+    : p.dir === 'bothWays' ? 'Ambos sentidos' : /^\d+$/.test(p.dir) ? `Controla a quien circula hacia el ${compass(p.dir)}` : p.dir;
+  const el = h(`<div class="hero">${badge(tramo ? 'gauge' : 'radar', p.kind === 'semaforo' ? '#bf5af2' : '#ff2d55')}<div>
+    <p class="kicker" style="color:#ff2d55">${title}</p>
+    <p class="big">${esc(p.road || (osm ? 'Vía urbana o sin identificar' : ''))} <span class="muted">${tramo && p.km != null && p.km2 != null ? `km ${nf.format(p.km)} a ${nf.format(p.km2)}` : esc(km(p.km))}</span></p>
+    ${p.prov ? `<p class="muted">${esc(titleCase(p.prov))}</p>` : ''}</div>
+    ${p.maxspeed ? `<span class="speed-sign" aria-label="Límite ${p.maxspeed} km/h">${p.maxspeed}</span>` : ''}</div>
+    ${p.note ? `<p class="note">${esc(p.note)}</p>` : ''}
     <div class="rows">${tramo && p.len ? row('gauge', `Mide la velocidad media en <b>${nf.format(p.len)} km</b>`) : ''}
-    ${p.dir ? row('road', p.dir === 'positive' ? 'Sentido creciente de la kilometración' : p.dir === 'negative' ? 'Sentido decreciente de la kilometración' : 'Ambos sentidos') : ''}
-    ${row('info', 'Ubicación publicada por la DGT. Una cabina puede estar vacía; los radares móviles y de helicóptero no se publican.')}</div>`);
-  el.append(actions(ctx, lon, lat, `Radar ${p.road}`, false));
-  ctx.sheet.show(tramo ? 'Radar de tramo' : 'Radar fijo', `${p.road} ${km(p.km)}`, el);
+    ${dirText ? row('road', esc(dirText)) : ''}
+    ${row('info', osm ? 'Ubicación aportada por la comunidad de OpenStreetMap; puede no estar en la lista oficial de la DGT o pertenecer a un ayuntamiento o comunidad autónoma.' : 'Ubicación publicada por la DGT. Una cabina puede estar vacía; los radares móviles y de helicóptero no se publican.')}</div>`);
+  el.append(actions(ctx, lon, lat, `${title} ${p.road ?? ''}`, false));
+  ctx.sheet.show(title, [p.road, km(p.km), osm ? 'OpenStreetMap' : 'DGT'].filter(Boolean).join(' · '), el);
 }
 
 export function stretch(ctx: Ctx, p: Record<string, unknown>, kind: 'stretch' | 'motos'): void {
@@ -420,4 +431,35 @@ export function incidentList(ctx: Ctx, feats: GeoJSON.Feature[]): HTMLElement {
     ul.append(li);
   }
   return ul;
+}
+
+// ---------------------------------------------------------------- community warnings
+
+export function report(ctx: Ctx, p: Report, lon: number, lat: number, onVote: () => void): void {
+  const style = REPORT_LOOK[p.kind] ?? ['alert', '#ff9f0a'];
+  const el = h(`<div class="hero">${badge(style[0], style[1])}<div><p class="kicker" style="color:#c77700">Aviso de la comunidad</p>
+    <p class="big">${esc(p.label)}</p><p class="muted">Avisado ${esc(ago(p.created))}${p.confirmed !== p.created ? ` · confirmado ${esc(ago(p.confirmed))}` : ''}</p></div></div>
+    <div class="stats"><div><b>${p.ups}</b><span>lo han visto</span></div><div><b>${p.downs}</b><span>dicen que ya no está</span></div><div><b>${esc(until(p.expires))}</b><span>caduca</span></div></div>
+    <div class="vote"><button class="btn" type="button" data-up="1">${iconSvg('thumbUp', 17)} Sigue ahí</button><button class="btn ghost" type="button" data-up="0">${iconSvg('thumbDown', 17)} Ya no está</button></div>
+    <p class="muted small">Avisos anónimos de otros conductores, sin verificar. Desaparecen solos y con los votos de «ya no está». No toques el móvil mientras conduces.</p>`);
+  el.querySelectorAll<HTMLButtonElement>('[data-up]').forEach((b) => b.addEventListener('click', async () => {
+    el.querySelectorAll<HTMLButtonElement>('[data-up]').forEach((x) => (x.disabled = true));
+    const r = await fetch(`/api/reports/${encodeURIComponent(p.id)}/vote`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ up: b.dataset.up === '1' }) }).catch(() => null);
+    const j = r ? await r.json().catch(() => ({})) : {};
+    const msg = !r ? 'Sin conexión.' : r.ok ? (j.repeat ? 'Ya habías votado este aviso.' : '¡Gracias!') : (j.error ?? 'No se pudo votar.');
+    el.querySelector('.vote')!.innerHTML = `<p class="pill-note">${esc(msg)}</p>`;
+    onVote();
+  }));
+  void lon; void lat;
+  ctx.sheet.show('Aviso de la comunidad', p.label, el);
+}
+
+export const REPORT_LOOK: Record<string, [IconName, string]> = {
+  radar_movil: ['radar', '#ff2d55'], control: ['siren', '#0a5bd8'], accidente: ['car', '#ff3b30'],
+  obstaculo: ['alert', '#e8a400'], atasco: ['gauge', '#ff9f0a'], vehiculo_parado: ['car', '#8e8e93'],
+};
+
+function until(iso: string): string {
+  const m = Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 60000));
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`;
 }
