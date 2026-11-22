@@ -1,0 +1,4 @@
+aiohttp==3.13.2
+duckdb==1.4.2
+pyarrow==22.0.0
+pytest==9.0.1

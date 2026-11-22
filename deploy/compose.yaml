@@ -1,0 +1,58 @@
+# Ruta viva (https://rutaviva.aminox.dev). Lives in ~/docker/rutaviva; deploy.sh copies this file there.
+name: rutaviva
+
+services:
+  web:
+    image: nginx:1.29-alpine
+    container_name: rutaviva
+    restart: unless-stopped
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./data/html:/usr/share/nginx/html:ro
+      - ./data/tiles:/usr/share/nginx/tiles:ro
+      - ./data/worker/live:/usr/share/nginx/live:ro
+    # Camera / pictogram cache (max 1 GB) stays inside the container: regenerable.
+    networks: [npm_default, internal]
+    mem_limit: 256m
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on: [worker]
+
+  worker:
+    image: rutaviva-worker:current
+    container_name: rutaviva-worker
+    restart: unless-stopped
+    volumes:
+      - ./data/worker:/data
+    networks: [internal]
+    mem_limit: 2g
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+
+  valhalla:
+    image: ghcr.io/valhalla/valhalla-scripted:3.9.1
+    container_name: rutaviva-valhalla
+    restart: unless-stopped
+    volumes:
+      - ./valhalla:/custom_files
+    environment:
+      - use_tiles_ignore_pbf=True
+      - build_elevation=False
+      - build_admins=True
+      - build_time_zones=True
+      - build_transit=False
+      - force_rebuild=False
+      - serve_tiles=True
+      - server_threads=2
+      - update_existing_config=True
+    networks: [internal]
+    mem_limit: 4g
+    logging: {driver: json-file, options: {max-size: "10m", max-file: "3"}}
+
+networks:
+  npm_default:
+    external: true
+  internal:

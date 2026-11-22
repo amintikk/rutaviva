@@ -1,0 +1,423 @@
+// Detail views for every kind of map feature, shown in the sheet.
+import type { Map as MlMap } from 'maplibre-gl';
+import {
+  ago, CATS, esc, FUEL_LABEL, FUELS, km, nf, price, SRC, titleCase, when, WHAT,
+  type Camera, type Cat, type Charger, type FC, type Incident, type Panel, type Quake, type Radar, type Station, type Zone,
+} from '../data.ts';
+import type { Layers } from '../map/layers.ts';
+import { lineChart } from './chart.ts';
+import { icon, iconSvg, type IconName } from './icons.ts';
+import type { Sheet } from './sheet.ts';
+
+export interface Ctx {
+  map: MlMap;
+  layers: Layers;
+  sheet: Sheet;
+  open: (kind: Kind, props: Record<string, unknown>, lon: number, lat: number, push?: boolean) => void;
+  routeTo: (lon: number, lat: number, label: string) => void;
+}
+export type Kind = 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake';
+
+const h = (html: string): HTMLElement => {
+  const d = document.createElement('div');
+  d.className = 'detail';
+  d.innerHTML = html;
+  return d;
+};
+
+const badge = (ic: IconName, color: string, size = 44) =>
+  `<span class="badge" style="--c:${color};width:${size}px;height:${size}px">${iconSvg(ic, Math.round(size * 0.5), '#fff', 2.2)}</span>`;
+
+const row = (ic: IconName, html: string) => `<div class="row">${iconSvg(ic, 18)}<div>${html}</div></div>`;
+
+function distKm(a: [number, number], b: [number, number]): number {
+  const R = 6371;
+  const dLat = ((b[1] - a[1]) * Math.PI) / 180;
+  const dLon = ((b[0] - a[0]) * Math.PI) / 180;
+  const la = (a[1] * Math.PI) / 180;
+  const lb = (b[1] * Math.PI) / 180;
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(la) * Math.cos(lb) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+function near(ctx: Ctx, source: string, lon: number, lat: number, radiusKm: number, limit = 6) {
+  return ctx.layers.features(source)
+    .map((f) => ({ f, d: distKm([lon, lat], (f.geometry as GeoJSON.Point).coordinates as [number, number]) }))
+    .filter((x) => x.d <= radiusKm)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, limit);
+}
+
+function camStrip(ctx: Ctx, lon: number, lat: number, exclude?: string): HTMLElement | null {
+  const cams = near(ctx, 'cameras', lon, lat, 8, 8).filter((x) => String(x.f.properties!.id) !== exclude);
+  if (!cams.length) return null;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<h3 class="sec">Cámaras cerca</h3>`;
+  const strip = document.createElement('div');
+  strip.className = 'cam-strip';
+  for (const { f, d } of cams) {
+    const p = f.properties as unknown as Camera;
+    const [clon, clat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cam-thumb';
+    b.innerHTML = `<img loading="lazy" alt="Cámara ${esc(p.road)} ${esc(km(p.km))}" src="/cam/${esc(p.id)}.jpg?t=${Math.floor(Date.now() / 120000)}"><span>${esc(p.road)} · ${d.toLocaleString('es-ES', { maximumFractionDigits: 1 })} km</span>`;
+    b.addEventListener('click', () => ctx.open('camera', p as unknown as Record<string, unknown>, clon, clat, true));
+    strip.append(b);
+  }
+  wrap.append(strip);
+  return wrap;
+}
+
+function actions(ctx: Ctx, lon: number, lat: number, label: string, share = true): HTMLElement {
+  const bar = document.createElement('div');
+  bar.className = 'actions';
+  const go = document.createElement('button');
+  go.className = 'btn';
+  go.type = 'button';
+  go.append(icon('navigation', 17), 'Cómo llegar');
+  go.addEventListener('click', () => ctx.routeTo(lon, lat, label));
+  bar.append(go);
+  const maps = document.createElement('a');
+  maps.className = 'btn ghost';
+  maps.href = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`;
+  maps.target = '_blank';
+  maps.rel = 'noopener';
+  maps.append(icon('external', 16), 'Abrir en navegador GPS');
+  bar.append(maps);
+  if (share && navigator.share) {
+    const s = document.createElement('button');
+    s.className = 'icon-btn ghost';
+    s.type = 'button';
+    s.setAttribute('aria-label', 'Compartir');
+    s.append(icon('share', 18));
+    s.addEventListener('click', () => void navigator.share({ title: label, url: location.href }).catch(() => {}));
+    bar.append(s);
+  }
+  return bar;
+}
+
+// ---------------------------------------------------------------- incidents
+
+export function incident(ctx: Ctx, p: Incident, lon: number, lat: number): void {
+  const c = CATS[p.cat as Cat] ?? CATS.otro;
+  const what = (p.what ?? '').split(',').filter((w) => w && WHAT[w] && !['mandatory', 'anyVehicle', 'unknown'].includes(w));
+  const place = [titleCase(p.muni), titleCase(p.prov)].filter(Boolean).join(', ');
+  const kms = p.km != null ? (p.km2 != null ? `del km ${nf.format(Math.min(p.km, p.km2))} al ${nf.format(Math.max(p.km, p.km2))}` : km(p.km)) : '';
+  const el = h(`<div class="hero">${badge(c.icon, c.color)}<div><p class="kicker" style="color:${c.color}">${esc(c.label)}</p>
+    <p class="big">${esc(p.road || 'Vía sin nombre')} ${kms ? `<span class="muted">${esc(kms)}</span>` : ''}</p>
+    ${place ? `<p class="muted">${esc(place)}</p>` : ''}</div></div>
+    ${what.length ? `<div class="chips">${what.map((w) => `<span class="chip">${esc(WHAT[w])}</span>`).join('')}</div>` : ''}
+    ${p.txt ? `<p class="note">${esc(titleCase(p.txt))}</p>` : ''}
+    <div class="rows">
+      ${p.start ? row('clock', `Desde ${esc(when(p.start))} <span class="muted">(${esc(ago(p.start))})</span>`) : ''}
+      ${p.end ? row('calendar', `Previsto hasta ${esc(when(p.end))}`) : ''}
+      ${p.dir && !['unknown', 'unspecified'].includes(p.dir) ? row('road', esc(WHAT[p.dir] ?? p.dir)) : ''}
+      ${row('info', `Fuente: ${esc(SRC[p.src] ?? p.src)}`)}
+    </div>`);
+  const strip = camStrip(ctx, lon, lat);
+  if (strip) el.append(strip);
+  el.append(actions(ctx, lon, lat, `${c.label} en ${p.road}`));
+  ctx.sheet.show(c.label, [p.road, place].filter(Boolean).join(' · '), el);
+}
+
+// ---------------------------------------------------------------- cameras
+
+export function camera(ctx: Ctx, p: Camera, lon: number, lat: number, push = false): void {
+  const el = h(`<figure class="cam-big"><img alt="Imagen en directo de la cámara de la ${esc(p.road)} ${esc(km(p.km))}" src="/cam/${esc(p.id)}.jpg?t=${Date.now()}">
+    <figcaption><span class="live-dot"></span><span class="cam-age">En directo · se actualiza cada minuto</span></figcaption></figure>
+    <div class="rows">${row('road', `${esc(p.road)} ${esc(km(p.km))}${p.dest ? ` <span class="muted">hacia ${esc(p.dest)}</span>` : ''}`)}
+    ${p.prov ? row('pin', esc(titleCase(p.prov))) : ''}${row('info', 'Cámara de la DGT')}</div>`);
+  const img = el.querySelector('img')!;
+  img.addEventListener('error', () => img.replaceWith(Object.assign(document.createElement('p'), { className: 'muted cam-off', textContent: 'La cámara no está emitiendo ahora mismo.' })));
+  const timer = window.setInterval(() => {
+    if (!img.isConnected) return window.clearInterval(timer);
+    img.src = `/cam/${p.id}.jpg?t=${Date.now()}`;
+  }, 60000);
+  // Previous / next camera on the same road.
+  const same = ctx.layers.features('cameras').filter((f) => (f.properties as Camera).road === p.road && (f.properties as Camera).km != null)
+    .sort((a, b) => ((a.properties as Camera).km ?? 0) - ((b.properties as Camera).km ?? 0));
+  const i = same.findIndex((f) => (f.properties as Camera).id === p.id);
+  if (i >= 0 && same.length > 1) {
+    const nav = document.createElement('div');
+    nav.className = 'cam-nav';
+    for (const [dir, j] of [['prev', i - 1], ['next', i + 1]] as const) {
+      const f = same[j];
+      const b = document.createElement('button');
+      b.className = 'btn ghost';
+      b.type = 'button';
+      b.disabled = !f;
+      if (f) {
+        const q = f.properties as Camera;
+        b.append(...(dir === 'prev' ? [icon('chevronLeft', 18), `km ${nf.format(q.km ?? 0)}`] : [`km ${nf.format(q.km ?? 0)}`, icon('chevronRight', 18)]));
+        b.addEventListener('click', () => {
+          const [x, y] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+          ctx.open('camera', q as unknown as Record<string, unknown>, x, y, false);
+          ctx.map.easeTo({ center: [x, y], duration: 600 });
+        });
+      } else b.textContent = dir === 'prev' ? 'Primera' : 'Última';
+      nav.append(b);
+    }
+    el.querySelector('.cam-big')!.after(nav);
+  }
+  const inc = near(ctx, 'incidents', lon, lat, 5, 4);
+  if (inc.length) {
+    const box = document.createElement('div');
+    box.innerHTML = `<h3 class="sec">Avisos cerca</h3>`;
+    box.append(incidentList(ctx, inc.map((x) => x.f)));
+    el.append(box);
+  }
+  ctx.sheet.show(`Cámara ${p.road}`, [km(p.km), titleCase(p.prov)].filter(Boolean).join(' · '), el, { push });
+}
+
+// ---------------------------------------------------------------- radars and stretches
+
+export function radar(ctx: Ctx, p: Radar, lon: number, lat: number): void {
+  const tramo = p.kind === 'tramo';
+  const el = h(`<div class="hero">${badge(tramo ? 'gauge' : 'radar', '#ff2d55')}<div>
+    <p class="kicker" style="color:#ff2d55">${tramo ? 'Radar de tramo' : 'Radar fijo'}</p>
+    <p class="big">${esc(p.road)} <span class="muted">${tramo && p.km != null && p.km2 != null ? `km ${nf.format(p.km)} a ${nf.format(p.km2)}` : esc(km(p.km))}</span></p>
+    ${p.prov ? `<p class="muted">${esc(titleCase(p.prov))}</p>` : ''}</div></div>
+    <div class="rows">${tramo && p.len ? row('gauge', `Mide la velocidad media en <b>${nf.format(p.len)} km</b>`) : ''}
+    ${p.dir ? row('road', p.dir === 'positive' ? 'Sentido creciente de la kilometración' : p.dir === 'negative' ? 'Sentido decreciente de la kilometración' : 'Ambos sentidos') : ''}
+    ${row('info', 'Ubicación publicada por la DGT. Una cabina puede estar vacía; los radares móviles y de helicóptero no se publican.')}</div>`);
+  el.append(actions(ctx, lon, lat, `Radar ${p.road}`, false));
+  ctx.sheet.show(tramo ? 'Radar de tramo' : 'Radar fijo', `${p.road} ${km(p.km)}`, el);
+}
+
+export function stretch(ctx: Ctx, p: Record<string, unknown>, kind: 'stretch' | 'motos'): void {
+  const motos = kind === 'motos';
+  const color = motos ? '#af52de' : '#ff2d55';
+  const k1 = p.km as number | undefined;
+  const k2 = p.km2 as number | undefined;
+  const el = h(`<div class="hero">${badge(motos ? 'bike' : 'shield', color)}<div>
+    <p class="kicker" style="color:${color}">${motos ? 'Tramo peligroso para motos' : 'Tramo de vigilancia intensificada (INVIVE)'}</p>
+    <p class="big">${esc(p.road)} <span class="muted">${k1 != null && k2 != null ? `km ${nf.format(k1)} a ${nf.format(k2)}` : esc(km(k1))}</span></p>
+    ${p.prov ? `<p class="muted">${esc(titleCase(String(p.prov)))}</p>` : ''}</div></div>
+    <p class="note">${motos ? 'Tramo señalizado con alta siniestralidad de motocicletas: la DGT recomienda extremar la precaución y aumenta la vigilancia.' : 'Tramo donde la DGT intensifica los controles de velocidad, normalmente con radares móviles.'}</p>`);
+  ctx.sheet.show(motos ? 'Tramo de riesgo para motos' : 'Tramo vigilado', String(p.road ?? ''), el);
+}
+
+// ---------------------------------------------------------------- variable message signs
+
+export function vms(ctx: Ctx, p: Panel): void {
+  const lines = (p.lines || '').split('\n').filter(Boolean);
+  const picts = (p.picts || '').split(',').filter(Boolean);
+  const el = h(`<div class="vms-board" role="img" aria-label="Panel: ${esc(lines.join('. '))}">
+    ${picts.length ? `<div class="vms-picts">${picts.slice(0, 2).map((c) => `<img alt="" src="/pict/${esc(c)}.png">`).join('')}</div>` : ''}
+    <div class="vms-text">${lines.map((l) => `<span>${esc(l)}</span>`).join('') || '<span class="muted">(solo pictograma)</span>'}</div></div>
+    <div class="rows">${row('road', `${esc(p.road)} ${esc(km(p.km))}${p.dest ? ` <span class="muted">hacia ${esc(p.dest)}</span>` : ''}`)}
+    ${p.set ? row('clock', `Mensaje puesto ${esc(when(p.set))} <span class="muted">(${esc(ago(p.set))})</span>`) : ''}
+    ${row('info', 'Panel de mensaje variable de la DGT')}</div>`);
+  el.querySelectorAll('.vms-picts img').forEach((img) => img.addEventListener('error', () => img.remove()));
+  ctx.sheet.show('Panel informativo', `${p.road} ${km(p.km)}`, el);
+}
+
+// ---------------------------------------------------------------- fuel
+
+function priceClass(v: number, pct: number[] | undefined): [string, string] {
+  if (!pct) return ['', ''];
+  if (v <= pct[1]!) return ['cheap', 'Barata'];
+  if (v >= pct[3]!) return ['dear', 'Cara'];
+  return ['mid', 'En la media'];
+}
+
+export function fuel(ctx: Ctx, p: Station, lon: number, lat: number): void {
+  const fc = ctx.layers.get('fuel') as FC | undefined;
+  const pct = fc?.pct ?? {};
+  const prices = Object.entries(p).filter(([k, v]) => k.startsWith('p_') && typeof v === 'number').map(([k, v]) => [k.slice(2), v as number] as const);
+  const order = FUELS.map((f) => f.code);
+  prices.sort((a, b) => (order.indexOf(a[0]) + 1 || 99) - (order.indexOf(b[0]) + 1 || 99));
+  const sel = ctx.layers.fuel;
+  // Rank among stations within 5 km for the selected fuel.
+  let rank = '';
+  let rankGood = false;
+  const mine = p[`p_${sel}`];
+  if (typeof mine === 'number') {
+    const around = near(ctx, 'fuel', lon, lat, 5, 500).map((x) => (x.f.properties as Station)[`p_${sel}`]).filter((v): v is number => typeof v === 'number');
+    if (around.length > 2) {
+      const pos = around.filter((v) => v < mine).length + 1;
+      rankGood = pos <= Math.ceil(around.length / 3);
+      rank = pos === 1 ? `La más barata de ${around.length} en 5 km para ${FUEL_LABEL[sel]?.toLowerCase()}` : `Puesto ${pos} de ${around.length} en 5 km para ${FUEL_LABEL[sel]?.toLowerCase()}`;
+    }
+  }
+  const el = h(`<div class="hero">${badge('fuel', '#34c759')}<div><p class="big">${esc(p.brand || 'Gasolinera')}</p>
+    <p class="muted">${esc(p.addr)}, ${esc(p.muni)}</p>${!p.public ? '<p class="warn">Venta restringida a socios o clientes</p>' : ''}</div></div>
+    ${rank ? `<p class="pill-note ${rankGood ? '' : 'meh'}">${iconSvg(rankGood ? 'down' : 'up', 16)} ${esc(rank)}</p>` : ''}
+    <table class="prices">${prices.map(([code, v]) => {
+      const [cls, label] = priceClass(v, pct[code]);
+      return `<tr><th>${esc(FUEL_LABEL[code] ?? code)}</th><td><b>${price(v)}</b></td><td>${cls ? `<span class="tag ${cls}">${label}</span>` : ''}</td></tr>`;
+    }).join('')}</table>
+    <div class="rows">${p.hours ? row('clock', esc(p.hours.replace(/;/g, ' · '))) : ''}
+    ${row('info', `Precios del Ministerio para la Transición Ecológica · ${esc(fc?.source_time ? `datos de ${fc.source_time.split(' ')[1]?.slice(0, 5) ?? ''}` : '')}`)}</div>
+    <h3 class="sec">Historia del precio</h3><div class="hist"><p class="muted">Cargando…</p></div>`);
+  el.append(actions(ctx, lon, lat, p.brand || 'Gasolinera'));
+  ctx.sheet.show(p.brand || 'Gasolinera', `${p.muni} · ${p.prov}`, el);
+  void history(el.querySelector('.hist')!, p.id, sel);
+}
+
+async function history(box: HTMLElement, id: string, sel: string): Promise<void> {
+  try {
+    const r = await fetch(`/api/fuel/station/${encodeURIComponent(id)}`);
+    if (!r.ok) throw new Error(String(r.status));
+    const j = (await r.json()) as { series: Record<string, [string, number][]>; info?: { first_day?: string } };
+    const codes = Object.keys(j.series).filter((c) => (j.series[c]?.length ?? 0) > 0);
+    if (!codes.length) {
+      box.innerHTML = '<p class="muted">Aún no tenemos historia de esta gasolinera.</p>';
+      return;
+    }
+    const show = (code: string) => {
+      const pts = (j.series[code] ?? []).map(([d, v]) => [Date.parse(d), v] as [number, number]);
+      const now = Date.now();
+      if (pts.length) pts.push([now, pts[pts.length - 1]![1]]);
+      const yearAgo = now - 365 * 864e5;
+      const last = pts.filter((q) => q[0] >= yearAgo);
+      const min = last.length ? last.reduce((a, b) => (b[1] < a[1] ? b : a)) : undefined;
+      const max = last.length ? last.reduce((a, b) => (b[1] > a[1] ? b : a)) : undefined;
+      const chart = lineChart([{ label: FUEL_LABEL[code] ?? code, color: '#34c759', points: pts, step: true }], {
+        height: 190, yFormat: (v) => v.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        xFormat: (t) => (pts[0] && now - pts[0][0] < 400 * 864e5 ? new Date(t).toLocaleDateString('es-ES', { month: 'short', year: '2-digit' }) : String(new Date(t).getFullYear())),
+      });
+      const facts = document.createElement('p');
+      facts.className = 'muted small';
+      facts.textContent = min && max ? `Último año: mínimo ${price(min[1])} (${new Date(min[0]).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}), máximo ${price(max[1])}. Datos desde ${new Date(pts[0]![0]).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}.` : '';
+      box.replaceChildren(tabs, chart, facts);
+    };
+    const tabs = document.createElement('div');
+    tabs.className = 'seg';
+    const first = codes.includes(sel) ? sel : codes[0]!;
+    for (const c of codes) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = FUELS.find((f) => f.code === c)?.short ?? FUEL_LABEL[c] ?? c;
+      b.setAttribute('aria-pressed', String(c === first));
+      b.addEventListener('click', () => {
+        tabs.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+        show(c);
+      });
+      tabs.append(b);
+    }
+    show(first);
+  } catch {
+    box.innerHTML = '<p class="muted">No se pudo cargar la historia ahora.</p>';
+  }
+}
+
+// ---------------------------------------------------------------- charging
+
+const STATUS: Record<string, [string, string]> = {
+  AVAILABLE: ['Libre', 'ok'], CHARGING: ['Cargando', 'busy'], BLOCKED: ['Ocupado', 'busy'], RESERVED: ['Reservado', 'busy'],
+  OUTOFORDER: ['Averiado', 'bad'], INOPERATIVE: ['Fuera de servicio', 'bad'], PLANNED: ['Previsto', 'off'], REMOVED: ['Retirado', 'off'], UNKNOWN: ['Sin datos', 'off'],
+};
+const STD: Record<string, string> = { IEC_62196_T2_COMBO: 'CCS', IEC_62196_T2: 'Tipo 2', CHADEMO: 'CHAdeMO', DOMESTIC_F: 'Schuko', IEC_62196_T1: 'Tipo 1', TESLA_S: 'Tesla', TESLA_R: 'Tesla' };
+
+interface ReveLoc { id: string; name: string; addr: string; owner?: string; web?: string; h24: boolean; evses: { id: string; ref?: string; status: string; since?: string; conns: { std: string; kw: number; price: string[] }[]; pay: string[] }[] }
+
+export function charger(ctx: Ctx, p: Charger, lon: number, lat: number): void {
+  const conns = (p.conns || '').split(',').filter(Boolean).map((c) => c.split(':'));
+  const el = h(`<div class="hero">${badge(p.dc ? 'zap' : 'plug', '#00a6a6')}<div><p class="big">${esc(p.name || p.op || 'Punto de recarga')}</p>
+    <p class="muted">${esc([p.addr, p.muni].filter(Boolean).join(', '))}</p></div></div>
+    <div class="stats"><div><b>${p.kw ? nf.format(p.kw) : '—'}</b><span>kW máx.</span></div><div><b>${p.points || '—'}</b><span>puntos</span></div>
+    <div><b>${conns.map(([k]) => esc(k)).join(' · ') || '—'}</b><span>conectores</span></div></div>
+    <div class="rows">${p.op ? row('plug', `Operador: ${esc(p.op)}`) : ''}${p.hours ? row('clock', esc(p.hours.length > 120 ? `${p.hours.slice(0, 117)}…` : p.hours)) : ''}</div>
+    <h3 class="sec">Ahora mismo</h3><div class="evlive"><p class="muted">Consultando el estado en REVE…</p></div>`);
+  el.append(actions(ctx, lon, lat, p.name || 'Punto de recarga'));
+  ctx.sheet.show(p.name || 'Punto de recarga', [p.muni, p.prov].filter(Boolean).join(' · '), el);
+  void liveCharger(el.querySelector('.evlive')!, lon, lat);
+}
+
+export async function liveCharger(box: HTMLElement, lon: number, lat: number, id?: string): Promise<void> {
+  try {
+    let locId = id;
+    if (!locId) {
+      const d = 0.004;
+      const r = await fetch(`/api/ev/markers?bbox=${lon - d},${lat - d},${lon + d},${lat + d}&z=16`);
+      if (!r.ok) throw new Error();
+      const ms = (await r.json()) as { t: string; lon: number; lat: number; id?: string }[];
+      const best = ms.filter((m) => m.t === 'l' && m.id).map((m) => ({ m, d: distKm([lon, lat], [m.lon, m.lat]) })).sort((a, b) => a.d - b.d)[0];
+      if (!best || best.d > 0.12) {
+        box.innerHTML = '<p class="muted">Este punto no envía su estado en tiempo real a REVE (solo es obligatorio desde 43 kW).</p>';
+        return;
+      }
+      locId = best.m.id;
+    }
+    const r = await fetch(`/api/ev/location/${locId}`);
+    if (!r.ok) throw new Error();
+    const loc = (await r.json()) as ReveLoc;
+    const counts = { ok: 0, busy: 0, bad: 0 };
+    for (const e of loc.evses) {
+      const s = STATUS[e.status]?.[1];
+      if (s === 'ok' || s === 'busy' || s === 'bad') counts[s]++;
+    }
+    box.innerHTML = `<p class="ev-sum"><span class="dot ok"></span>${counts.ok} libres <span class="dot busy"></span>${counts.busy} en uso <span class="dot bad"></span>${counts.bad} averiados</p>
+      <ul class="evses">${loc.evses.map((e) => {
+        const [label, cls] = STATUS[e.status] ?? [e.status, 'off'];
+        const c = e.conns[0];
+        const pr = e.conns.flatMap((x) => x.price).filter(Boolean)[0];
+        return `<li><span class="tag ${cls}">${esc(label)}</span><span class="evse-name">${esc(e.ref || e.id?.split('*').pop() || '')}</span>
+          <span>${esc(e.conns.map((x) => STD[x.std] ?? x.std).join(' + '))}${c?.kw ? ` · ${nf.format(c.kw)} kW` : ''}</span>
+          <span class="evse-price">${pr ? esc(pr.replace('EUR', '€').replace('.', ',')) : '<span class="muted">precio no publicado</span>'}</span>
+          ${e.since ? `<small class="muted">${esc(ago(e.since))}</small>` : ''}</li>`;
+      }).join('')}</ul>
+      <p class="muted small">${loc.owner ? `${esc(loc.owner)} · ` : ''}Estado y precio en tiempo real de REVE (Red Eléctrica). Precios con IVA según publica el operador.</p>`;
+  } catch {
+    box.innerHTML = '<p class="muted">No se pudo consultar el estado en tiempo real ahora.</p>';
+  }
+}
+
+export function chargerLive(ctx: Ctx, p: { id: string; name?: string }, lon: number, lat: number): void {
+  const el = h(`<div class="hero">${badge('zap', '#00a6a6')}<div><p class="big">${esc(p.name || 'Punto de recarga')}</p></div></div><div class="evlive"><p class="muted">Consultando…</p></div>`);
+  el.append(actions(ctx, lon, lat, p.name || 'Punto de recarga'));
+  ctx.sheet.show(p.name || 'Punto de recarga', 'Estado en tiempo real', el);
+  void liveCharger(el.querySelector('.evlive')!, lon, lat, p.id);
+}
+
+// ---------------------------------------------------------------- ZBE
+
+const BADGE_STYLE: Record<string, [string, string]> = {
+  '0': ['#1d6fd1', 'CERO'], ECO: ['#1f9e6e', 'ECO'], C: ['#2fa84f', 'C'], B: ['#e7b416', 'B'], A: ['#8e8e93', 'Sin etiqueta'],
+};
+export function zbe(ctx: Ctx, p: Zone): void {
+  const banned = p.banned === '?' ? null : (p.banned || '').split(',').filter(Boolean);
+  const all = ['0', 'ECO', 'C', 'B', 'A'];
+  const pill = (b: string, ok: boolean) => `<span class="dgt-badge ${ok ? '' : 'no'}" style="--c:${BADGE_STYLE[b]![0]}">${BADGE_STYLE[b]![1]}</span>`;
+  const el = h(`<div class="hero">${badge('leaf', '#30a46c')}<div><p class="big">${esc(p.name)}</p><p class="muted">${esc(p.city)}${p.since ? ` · desde ${esc(new Date(p.since).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }))}` : ''}</p></div></div>
+    ${banned ? `<h3 class="sec">Quién puede entrar</h3><div class="badges">${all.map((b) => pill(b, !banned.includes(b))).join('')}</div>
+      <p class="muted small">Tachadas: etiquetas con restricción de acceso según el fichero de la DGT. Residentes, servicios y otros casos suelen tener excepciones.</p>`
+      : '<p class="note">El fichero de la DGT no deja claro qué etiquetas se restringen aquí. Consulta las condiciones del ayuntamiento.</p>'}
+    ${p.periods ? row('clock', esc(p.periods)) : ''}
+    ${p.url ? `<p><a class="btn ghost" href="${esc(p.url)}" target="_blank" rel="noopener">${iconSvg('external', 16)} Normas del ayuntamiento</a></p>` : ''}`);
+  ctx.sheet.show(p.name, `Zona de bajas emisiones · ${p.city}`, el);
+}
+
+// ---------------------------------------------------------------- earthquakes
+
+export function quake(ctx: Ctx, p: Quake): void {
+  const el = h(`<div class="hero">${badge('activity', '#a2845e')}<div><p class="kicker">Terremoto</p><p class="big">Magnitud ${p.mag != null ? nf.format(p.mag) : '—'}</p><p class="muted">${esc(titleCase(p.place))}</p></div></div>
+    <div class="rows">${row('clock', esc(p.when))}${row('info', 'Instituto Geográfico Nacional')}</div>
+    ${p.url ? `<p><a class="btn ghost" href="${esc(p.url)}" target="_blank" rel="noopener">${iconSvg('external', 16)} Ficha del IGN</a></p>` : ''}`);
+  ctx.sheet.show('Terremoto', titleCase(p.place), el);
+}
+
+// ---------------------------------------------------------------- lists
+
+export function incidentList(ctx: Ctx, feats: GeoJSON.Feature[]): HTMLElement {
+  const ul = document.createElement('ul');
+  ul.className = 'list';
+  for (const f of feats) {
+    const p = f.properties as unknown as Incident;
+    const c = CATS[p.cat] ?? CATS.otro;
+    const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = `${badge(c.icon, c.color, 32)}<span><b>${esc(p.road || c.label)}</b> ${p.km != null ? `<span class="muted">${esc(km(p.km))}</span>` : ''}<br><small>${esc(c.label)} · ${esc(titleCase(p.muni) || titleCase(p.prov))}</small></span><small class="muted">${esc(ago(p.start))}</small>`;
+    b.addEventListener('click', () => {
+      ctx.map.flyTo({ center: [lon, lat], zoom: Math.max(ctx.map.getZoom(), 12), duration: 900 });
+      ctx.open('incident', p as unknown as Record<string, unknown>, lon, lat, true);
+    });
+    li.append(b);
+    ul.append(li);
+  }
+  return ul;
+}
