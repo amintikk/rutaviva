@@ -1,14 +1,14 @@
 // Data layers on top of the base map: sources, styling, visibility and periodic refresh.
 import type { ExpressionSpecification, GeoJSONSource, Map as MlMap, MapGeoJSONFeature } from 'maplibre-gl';
 import { CATS, live, type Cat, type FC } from '../data.ts';
-import { markerImage, squareImage, type IconName } from '../ui/icons.ts';
+import { markerImage, radarImage, squareImage, type IconName } from '../ui/icons.ts';
 
 export type Group = 'traffic' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'vms' | 'zbe' | 'quakes';
 
 export const GROUPS: { id: Group; label: string; icon: IconName; color: string; hint: string }[] = [
   { id: 'traffic', label: 'Tráfico', icon: 'alert', color: '#ff3b30', hint: 'Accidentes, cortes, obras, nieve y retenciones' },
   { id: 'cameras', label: 'Cámaras', icon: 'video', color: '#5856d6', hint: 'Imagen en directo de la DGT' },
-  { id: 'radars', label: 'Radares', icon: 'radar', color: '#ff2d55', hint: 'Fijos, de tramo y tramos vigilados' },
+  { id: 'radars', label: 'Radares', icon: 'cctv', color: '#ff2d55', hint: 'Fijos, de tramo y tramos vigilados' },
   { id: 'fuel', label: 'Gasolineras', icon: 'fuel', color: '#34c759', hint: 'Precio de hoy y su historia' },
   { id: 'ev', label: 'Recarga', icon: 'zap', color: '#00a6a6', hint: 'Puntos de recarga, estado y precio' },
   { id: 'vms', label: 'Paneles', icon: 'panel', color: '#e3a008', hint: 'Lo que dicen ahora los paneles' },
@@ -39,6 +39,28 @@ export class Layers {
 
   constructor(map: MlMap) {
     this.map = map;
+    // Radar markers are generated the first time the map asks for one.
+    map.on('styleimagemissing', (e: { id: string }) => {
+      const m = /^rs-(\d+)-(\w+)$/.exec(e.id);
+      if (!m || this.pending.has(e.id)) return;
+      this.pending.add(e.id);
+      void radarImage(Number(m[1]), m[2]!, this.dark).then((img) => {
+        if (!map.hasImage(e.id)) map.addImage(e.id, img, { pixelRatio: 2 });
+        this.pending.delete(e.id);
+      });
+    });
+  }
+
+  private pending = new Set<string>();
+
+  /** Draw every speed-limit / kind combination present in the data before showing it. */
+  private async radarImages(fc: FC): Promise<void> {
+    const ids = new Set(fc.features.map((f) => `rs-${Number(f.properties?.maxspeed ?? 0) || 0}-${String(f.properties?.kind ?? 'fijo')}`));
+    await Promise.all([...ids].filter((id) => !this.map.hasImage(id)).map(async (id) => {
+      const [, sp, kind] = id.split('-');
+      const img = await radarImage(Number(sp), kind!, this.dark);
+      if (!this.map.hasImage(id)) this.map.addImage(id, img, { pixelRatio: 2 });
+    }));
   }
 
   get(name: string): FC | undefined {
@@ -59,6 +81,8 @@ export class Layers {
     if (!m.getSource('selection')) m.addSource('selection', { type: 'geojson', data: empty() });
     if (!m.getSource('route')) m.addSource('route', { type: 'geojson', data: empty() });
     await this.images();
+    const radars = this.data.get('radars');
+    if (radars) await this.radarImages(radars);
     this.addLayers();
     for (const g of GROUPS) this.applyVisibility(g.id);
     this.applyFuel();
@@ -74,14 +98,10 @@ export class Layers {
     };
     for (const [cat, c] of Object.entries(CATS)) add(`inc-${cat}`, markerImage(c.icon, c.color, 30, 2, ring));
     add('cam', squareImage('video', '#5856d6', 24));
-    add('radar-fijo', markerImage('radar', '#ff2d55', 26, 2, ring));
-    add('radar-tramo', markerImage('gauge', '#ff2d55', 26, 2, ring));
     add('vms', squareImage('panel', '#d99a00', 24));
     add('ev-dc', markerImage('zap', '#00a6a6', 26, 2, ring));
     add('ev-ac', markerImage('plug', '#4aa8a8', 24, 2, ring));
     add('fuel-pin', markerImage('fuel', '#34c759', 26, 2, ring));
-    add('radar-osm', markerImage('radar', '#ff6b8a', 22, 2, ring));
-    add('radar-semaforo', markerImage('radar', '#bf5af2', 22, 2, ring));
     await Promise.all(jobs);
   }
 
@@ -144,12 +164,11 @@ export class Layers {
     add({ id: 'radar-dot', type: 'circle', source: 'radars', minzoom: 5, maxzoom: 9, paint: {
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 9, 3.6], 'circle-color': ['case', ['==', ['get', 'src'], 'osm'], '#ff6b8a', '#ff2d55'],
       'circle-stroke-color': halo, 'circle-stroke-width': 0.8 } });
+    // Speed-limit sign markers, drawn on demand for each limit and kind (see installRadarImages).
     add({ id: 'radar-icon', type: 'symbol', source: 'radars', minzoom: 9, layout: {
-      'icon-image': ['case', ['==', ['get', 'kind'], 'tramo'], 'radar-tramo', ['==', ['get', 'kind'], 'semaforo'], 'radar-semaforo', ['==', ['get', 'src'], 'osm'], 'radar-osm', 'radar-fijo'],
-      'icon-allow-overlap': true, 'icon-ignore-placement': true,
-      'text-field': ['step', ['zoom'], '', 12, ['to-string', ['coalesce', ['get', 'maxspeed'], '']]], 'text-font': ['Noto Sans Medium'], 'text-size': 11,
-      'text-offset': [1.35, 0], 'text-anchor': 'left', 'text-optional': true },
-      paint: { 'text-color': '#ff2d55', 'text-halo-color': halo, 'text-halo-width': 2 } });
+      'icon-image': ['concat', 'rs-', ['to-string', ['coalesce', ['get', 'maxspeed'], 0]], '-', ['coalesce', ['get', 'kind'], 'fijo']],
+      'icon-allow-overlap': true, 'icon-ignore-placement': true, 'icon-size': ['interpolate', ['linear'], ['zoom'], 9, 0.8, 13, 1],
+      'symbol-sort-key': ['coalesce', ['get', 'maxspeed'], 0] } });
 
     // Earthquakes.
     add({ id: 'quake-dot', type: 'circle', source: 'quakes', paint: {
@@ -203,6 +222,7 @@ export class Layers {
   async load(g: Group): Promise<void> {
     await Promise.all(SOURCES[g].map(async (name) => {
       const fc = await live<FC>(name, REFRESH[g] / 2);
+      if (name === 'radars') await this.radarImages(fc);
       this.data.set(name, fc);
       (this.map.getSource(name) as GeoJSONSource | undefined)?.setData(fc);
       this.onData(name, fc);

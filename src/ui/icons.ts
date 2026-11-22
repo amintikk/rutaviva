@@ -5,7 +5,7 @@ import {
   CircleDot, Clock, CloudRain, Compass, Construction, Euro, ExternalLink, Flag, Fuel, Gauge, Info, Layers, Leaf, LoaderCircle,
   LocateFixed, MapPin, Menu, Minus, Moon, Mountain, Navigation, OctagonX, Plus, PlugZap, Radar, RectangleHorizontal, RefreshCw,
   Route, Search, Share2, ShieldAlert, Signpost, Snowflake, Sun, TrafficCone, TrendingDown, TrendingUp, TriangleAlert, Video, Waypoints,
-  X, Zap, Bike, type IconNode,
+  X, Zap, Bike, Cctv, MoveHorizontal, CircleDot as Lights, type IconNode,
 } from 'lucide';
 
 export const ICONS = {
@@ -16,7 +16,7 @@ export const ICONS = {
   minus: Minus, moon: Moon, mountain: Mountain, navigation: Navigation, closed: OctagonX, plus: Plus, plug: PlugZap, radar: Radar,
   panel: RectangleHorizontal, refresh: RefreshCw, route: Route, search: Search, share: Share2, shield: ShieldAlert, road: Signpost,
   snow: Snowflake, sun: Sun, cone: TrafficCone, down: TrendingDown, up: TrendingUp, alert: TriangleAlert, video: Video,
-  waypoints: Waypoints, x: X, zap: Zap, bike: Bike,
+  waypoints: Waypoints, x: X, zap: Zap, bike: Bike, cctv: Cctv, section: MoveHorizontal, lights: Lights,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;
@@ -92,5 +92,73 @@ export async function squareImage(name: IconName, color: string, size = 26, rati
   img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(iconSvg(name, glyph, '#ffffff', 2.3))}`;
   await img.decode();
   ctx.drawImage(img, (px - glyph) / 2, (px - glyph) / 2, glyph, glyph);
+  return ctx.getImageData(0, 0, px, px);
+}
+
+/**
+ * Speed camera marker: a speed-limit sign (white disc, red ring, the limit in the middle) with a
+ * small badge for the kind of camera; without a known limit, a red disc with a camera glyph.
+ */
+export async function radarImage(speed: number, kind: string, dark: boolean, ratio = 2): Promise<ImageData> {
+  const size = 30;
+  const px = size * ratio;
+  const c = document.createElement('canvas');
+  c.width = c.height = px;
+  const ctx = c.getContext('2d')!;
+  const r = px / 2 - 2 * ratio;
+  const cx = px / 2 - (speed ? 1.5 * ratio : 0);
+  const cy = px / 2 - (speed ? 1.5 * ratio : 0);
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 3 * ratio;
+  ctx.shadowOffsetY = 1 * ratio;
+  const glyph = async (name: IconName, x: number, y: number, s: number, color: string, stroke = 2.3) => {
+    const img = new Image();
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(iconSvg(name, Math.round(s), color, stroke))}`;
+    await img.decode();
+    ctx.drawImage(img, x - s / 2, y - s / 2, s, s);
+  };
+  if (speed) {
+    const R = r - 1.5 * ratio;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = R * 0.24;
+    ctx.strokeStyle = '#e0201b';
+    ctx.beginPath();
+    ctx.arc(cx, cy, R - ctx.lineWidth / 2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = '#111111';
+    const label = String(speed);
+    ctx.font = `800 ${(label.length > 2 ? 9.2 : 11) * ratio}px Inter, 'Inter Variable', system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, cx, cy + 0.6 * ratio);
+    // Badge: what kind of camera it is.
+    const bx = px - 7 * ratio;
+    const by = px - 7 * ratio;
+    const br = 6.2 * ratio;
+    const badge = kind === 'tramo' ? '#0a84ff' : kind === 'semaforo' ? '#8e44ad' : '#1c1c1e';
+    ctx.beginPath();
+    ctx.arc(bx, by, br, 0, Math.PI * 2);
+    ctx.fillStyle = badge;
+    ctx.fill();
+    ctx.lineWidth = 1.4 * ratio;
+    ctx.strokeStyle = dark ? '#1c1c1e' : '#ffffff';
+    ctx.stroke();
+    await glyph(kind === 'tramo' ? 'section' : kind === 'semaforo' ? 'lights' : 'cctv', bx, by, br * 1.25, '#ffffff', 2.6);
+  } else {
+    ctx.beginPath();
+    ctx.arc(px / 2, px / 2, r, 0, Math.PI * 2);
+    ctx.fillStyle = dark ? '#1c1c1e' : '#ffffff';
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.beginPath();
+    ctx.arc(px / 2, px / 2, r - 1.8 * ratio, 0, Math.PI * 2);
+    ctx.fillStyle = kind === 'tramo' ? '#0a84ff' : kind === 'semaforo' ? '#8e44ad' : '#e0201b';
+    ctx.fill();
+    await glyph(kind === 'tramo' ? 'section' : 'cctv', px / 2, px / 2, r * 1.15, '#ffffff', 2.4);
+  }
   return ctx.getImageData(0, 0, px, px);
 }

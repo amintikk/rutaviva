@@ -183,7 +183,7 @@ export function radar(ctx: Ctx, p: Radar, lon: number, lat: number): void {
   };
   const dirText = !p.dir ? '' : p.dir === 'positive' ? 'Sentido creciente de la kilometración' : p.dir === 'negative' ? 'Sentido decreciente de la kilometración'
     : p.dir === 'bothWays' ? 'Ambos sentidos' : /^\d+$/.test(p.dir) ? `Controla a quien circula hacia el ${compass(p.dir)}` : p.dir;
-  const el = h(`<div class="hero">${badge(tramo ? 'gauge' : 'radar', p.kind === 'semaforo' ? '#bf5af2' : '#ff2d55')}<div>
+  const el = h(`<div class="hero">${badge(tramo ? 'section' : 'cctv', tramo ? '#0a84ff' : p.kind === 'semaforo' ? '#8e44ad' : '#e0201b')}<div>
     <p class="kicker" style="color:#ff2d55">${title}</p>
     <p class="big">${esc(p.road || (osm ? 'Vía urbana o sin identificar' : ''))} <span class="muted">${tramo && p.km != null && p.km2 != null ? `km ${nf.format(p.km)} a ${nf.format(p.km2)}` : esc(km(p.km))}</span></p>
     ${p.prov ? `<p class="muted">${esc(titleCase(p.prov))}</p>` : ''}</div>
