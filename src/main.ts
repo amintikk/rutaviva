@@ -13,6 +13,7 @@ import { baseStyle } from './map/style.ts';
 import { initConsent, track } from './ui/consent.ts';
 import * as D from './ui/details.ts';
 import { icon, iconSvg } from './ui/icons.ts';
+import { nearbyFuel } from './ui/nearby.ts';
 import { Planner } from './ui/route.ts';
 import { SearchBox, type Candidate, type Place } from './ui/search.ts';
 import { Sheet } from './ui/sheet.ts';
@@ -60,7 +61,7 @@ const map = new maplibregl.Map({
   maxPitch: 75,
   fadeDuration: 150,
 });
-map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: 'Datos: DGT, MITECO, REVE (Red Eléctrica), IGN · <a href="/fuentes/">Fuentes</a>' }), 'bottom-right');
+map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: 'Datos: DGT, MITECO, REVE (Red Eléctrica), IGN, NASA FIRMS, Copernicus EFFIS · <a href="/fuentes/">Fuentes</a>' }), 'bottom-right');
 map.addControl(new maplibregl.ScaleControl({ unit: 'metric', maxWidth: 90 }), 'bottom-right');
 map.touchZoomRotate.enableRotation();
 
@@ -123,6 +124,13 @@ for (const f of FUELS.slice(0, 5)) {
   });
   fuelSeg.append(b);
 }
+const nearBtn = document.createElement('button');
+nearBtn.type = 'button';
+nearBtn.className = 'near-btn';
+nearBtn.title = 'Gasolineras abiertas cerca de ti, por precio o distancia';
+nearBtn.append(icon('locate', 15), 'Cerca');
+nearBtn.addEventListener('click', () => { pill.hidden = true; void nearbyFuel(ctx); track('fuel_nearby'); });
+fuelSeg.append(nearBtn);
 try {
   const f = localStorage.getItem('rutaviva-fuel');
   if (f && FUELS.some((x) => x.code === f)) {
@@ -196,9 +204,19 @@ async function toggle(g: Group, on = !active.has(g)): Promise<void> {
   if (g === 'ev') void refreshEvLive();
 }
 
+// Kinds that can be linked to (?ver=kind:id) and the source that holds them.
+const SHARE_SOURCE: Partial<Record<D.Kind, string>> = {
+  incident: 'incidents', camera: 'cameras', radar: 'radars', stretch: 'invive', motos: 'motos', fuel: 'fuel', ev: 'ev',
+  vms: 'vms', zbe: 'zbe', quake: 'quakes', toll: 'tolls', fire: 'fires',
+};
+
 function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, lat: number, push = false): void {
   pill.hidden = true;
   layers.select({ lon, lat });
+  const id = props.id != null ? String(props.id) : '';
+  // Radar sections share the id of their radar point.
+  const shareKind = kind === 'radar' && props.kind === 'tramo' ? 'radar' : kind;
+  sheet.pendingShare = SHARE_SOURCE[shareKind] && id ? { param: `${shareKind}:${id}`, title: String(props.name ?? props.brand ?? props.road ?? 'Ruta viva') } : null;
   const p = props as never;
   switch (kind) {
     case 'incident': D.incident(ctx, p, lon, lat); break;
@@ -213,11 +231,14 @@ function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, l
     case 'vms': D.vms(ctx, p); break;
     case 'zbe': D.zbe(ctx, p); break;
     case 'quake': D.quake(ctx, p); break;
+    case 'toll': D.toll(ctx, props, lon, lat); break;
+    case 'fire': D.fire(ctx, props, lon, lat); break;
   }
+  sheet.pendingShare = null;
   track('detail', { kind });
 }
 
-const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'traffic-lines', 'traffic-dots', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'radar-sections', 'motos', 'invive', 'motos-ends', 'invive-ends', 'zbe-fill'];
+const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'traffic-lines', 'traffic-dots', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'fire-icon', 'fire-dot', 'toll-booth', 'services-icon', 'radar-sections', 'motos', 'invive', 'motos-ends', 'invive-ends', 'toll-line', 'burnt-fill', 'zbe-fill'];
 map.on('click', (e) => {
   const pad = mobile ? 12 : 6;
   const feats = map.queryRenderedFeatures([[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]], { layers: CLICKABLE.filter((l) => map.getLayer(l)) });
@@ -229,7 +250,7 @@ map.on('click', (e) => {
   const pt = f.geometry.type === 'Point' ? (f.geometry.coordinates as [number, number]) : [e.lngLat.lng, e.lngLat.lat] as [number, number];
   const kind: D.Kind | null = g === 'traffic' ? (f.source === 'traffic' ? 'congestion' : 'incident') : g === 'cameras' ? 'camera' : g === 'radars'
     ? (f.source === 'invive' ? 'stretch' : f.source === 'motos' ? 'motos' : 'radar')
-    : g === 'fuel' ? 'fuel' : g === 'ev' ? 'ev' : g === 'ev-live' ? 'evlive' : g === 'vms' ? 'vms' : g === 'zbe' ? 'zbe' : g === 'quakes' ? 'quake' : null;
+    : g === 'fuel' ? 'fuel' : g === 'ev' ? 'ev' : g === 'ev-live' ? 'evlive' : g === 'vms' ? 'vms' : g === 'zbe' ? 'zbe' : g === 'quakes' ? 'quake' : g === 'tolls' ? 'toll' : g === 'fires' ? 'fire' : null;
   if (kind === 'radar' && f.source === 'radar-sections') props.kind = 'tramo';
   if (kind) openDetail(kind, props, pt[0], pt[1]);
 });
@@ -434,10 +455,46 @@ map.on('load', async () => {
     const c = roadSuggestions(road)[0];
     if (c?.bbox) goTo({ label: c.address, short: c.address, lon: c.lng, lat: c.lat, bbox: c.bbox });
   }
-  if (params.get('ruta') !== null) planner.open();
+  if (params.get('ver')) void openShared(params.get('ver')!);
+  else if (params.get('ruta') !== null) planner.open();
   else if (!location.hash.includes('mapa=') || !mobile) void showSummary(true);
   document.body.classList.add('ready');
 });
+
+/** Opens the item of a shared link (?ver=kind:id), turning its layer on. */
+async function openShared(v: string): Promise<void> {
+  const i = v.indexOf(':');
+  const kind = v.slice(0, i) as D.Kind;
+  const id = v.slice(i + 1);
+  const source = SHARE_SOURCE[kind];
+  const group = source ? GROUPS.find((g) => layers.sources(g.id).includes(source)) : undefined;
+  if (!source || !group) return void showSummary(true);
+  if (!active.has(group.id)) await toggle(group.id, true);
+  const f = layers.features(source).find((x) => String((x.properties as { id?: unknown }).id) === id);
+  if (!f) {
+    toast('Ese elemento ya no está en el mapa: puede que el aviso haya terminado.');
+    sheet.pendingShare = null;
+    void showSummary(true);
+    return;
+  }
+  const g = f.geometry;
+  const coords: [number, number][] = g.type === 'Point' ? [g.coordinates as [number, number]]
+    : g.type === 'LineString' || g.type === 'MultiPoint' ? (g.coordinates as [number, number][])
+    : g.type === 'MultiLineString' || g.type === 'Polygon' ? (g.coordinates as [number, number][][]).flat()
+    : g.type === 'MultiPolygon' ? (g.coordinates as [number, number][][][]).flat(2) : [];
+  if (!coords.length) return;
+  const xs = coords.map((c) => c[0]);
+  const ys = coords.map((c) => c[1]);
+  const center: [number, number] = g.type === 'Point' ? coords[0]! : [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+  openDetail(kind, { ...(f.properties as Record<string, unknown>) }, center[0], center[1]);
+  const pad = mobile ? { top: 120, bottom: window.innerHeight * 0.5, left: 30, right: 30 } : { top: 100, bottom: 60, left: 440, right: 80 };
+  if (g.type === 'Point') map.jumpTo({ center, zoom: Math.max(map.getZoom(), 14) });
+  else map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: pad, maxZoom: 15, duration: 0 });
+  track('shared_open', { kind });
+}
+
+// Fuel stations open or close with the clock.
+window.setInterval(() => layers.refreshOpen(), 5 * 60000);
 
 map.on('error', (e) => {
   if (String((e as unknown as { error?: { message?: string } }).error?.message ?? '').includes('pmtiles')) toast('El mapa base tarda en cargar. Reintentando…');

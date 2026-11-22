@@ -1,9 +1,10 @@
 // Data layers on top of the base map: sources, styling, visibility and periodic refresh.
 import type { ExpressionSpecification, GeoJSONSource, Map as MlMap, MapGeoJSONFeature } from 'maplibre-gl';
 import { CATS, live, type Cat, type FC } from '../data.ts';
+import { openState } from '../ui/hours.ts';
 import { markerImage, radarImage, squareImage, type IconName } from '../ui/icons.ts';
 
-export type Group = 'traffic' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'vms' | 'zbe' | 'quakes';
+export type Group = 'traffic' | 'cameras' | 'radars' | 'fuel' | 'ev' | 'tolls' | 'fires' | 'vms' | 'zbe' | 'quakes';
 
 export const GROUPS: { id: Group; label: string; icon: IconName; color: string; hint: string }[] = [
   { id: 'traffic', label: 'Tráfico', icon: 'alert', color: '#ff3b30', hint: 'Accidentes, cortes, obras, nieve y atascos en Madrid y Barcelona' },
@@ -11,20 +12,22 @@ export const GROUPS: { id: Group; label: string; icon: IconName; color: string; 
   { id: 'radars', label: 'Radares', icon: 'cctv', color: '#ff2d55', hint: 'Fijos, de tramo y tramos vigilados' },
   { id: 'fuel', label: 'Gasolineras', icon: 'fuel', color: '#34c759', hint: 'Precio de hoy y su historia' },
   { id: 'ev', label: 'Recarga', icon: 'zap', color: '#00a6a6', hint: 'Puntos de recarga, estado y precio' },
+  { id: 'tolls', label: 'Peajes', icon: 'ticket', color: '#ff9f0a', hint: 'Autopistas de peaje, cabinas y áreas de servicio' },
+  { id: 'fires', label: 'Incendios', icon: 'flame', color: '#ff453a', hint: 'Focos detectados por satélite (48 h) y zonas quemadas (30 días)' },
   { id: 'vms', label: 'Paneles', icon: 'panel', color: '#e3a008', hint: 'Lo que dicen ahora los paneles' },
   { id: 'zbe', label: 'Bajas emisiones', icon: 'leaf', color: '#30a46c', hint: 'Zonas ZBE y qué etiquetas entran' },
   { id: 'quakes', label: 'Terremotos', icon: 'activity', color: '#a2845e', hint: 'Últimos 10 días (IGN)' },
 ];
 
 // How often each group's data is fetched again while visible (seconds).
-const REFRESH: Record<Group, number> = { traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, vms: 180, zbe: 86400, quakes: 600 };
+const REFRESH: Record<Group, number> = { traffic: 180, cameras: 3600, radars: 86400, fuel: 1800, ev: 86400, tolls: 86400, fires: 1800, vms: 180, zbe: 86400, quakes: 600 };
 const SOURCES: Record<Group, string[]> = {
   traffic: ['incidents', 'incident-lines', 'traffic'], cameras: ['cameras'], radars: ['radars', 'radar-sections', 'invive', 'motos'],
-  fuel: ['fuel'], ev: ['ev'], vms: ['vms'], zbe: ['zbe'], quakes: ['quakes'],
+  fuel: ['fuel'], ev: ['ev'], tolls: ['tolls'], fires: ['fires'], vms: ['vms'], zbe: ['zbe'], quakes: ['quakes'],
 };
 
 export const CLICKABLE = ['traffic-lines', 'traffic-dots', 'inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
-  'fuel-dot', 'fuel-label', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot', 'invive-ends', 'motos-ends'];
+  'fuel-dot', 'fuel-label', 'toll-line', 'toll-booth', 'services-icon', 'fire-icon', 'fire-dot', 'burnt-fill', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot', 'invive-ends', 'motos-ends'];
 
 const empty = (): FC => ({ type: 'FeatureCollection', features: [] });
 
@@ -63,6 +66,10 @@ export class Layers {
     }));
   }
 
+  sources(g: Group): string[] {
+    return SOURCES[g];
+  }
+
   get(name: string): FC | undefined {
     return this.data.get(name);
   }
@@ -79,7 +86,8 @@ export class Layers {
     }
     if (!m.getSource('ev-live')) m.addSource('ev-live', { type: 'geojson', data: empty() });
     if (!m.getSource('selection')) m.addSource('selection', { type: 'geojson', data: empty() });
-    if (!m.getSource('route')) m.addSource('route', { type: 'geojson', data: empty() });
+    if (!m.getSource('route')) m.addSource('route', { type: 'geojson', data: this.route ?? empty() });
+    if (!m.getSource('route-alt')) m.addSource('route-alt', { type: 'geojson', data: this.routeAlt ?? empty() });
     await this.images();
     const radars = this.data.get('radars');
     if (radars) await this.radarImages(radars);
@@ -102,6 +110,10 @@ export class Layers {
     add('ev-dc', markerImage('zap', '#00a6a6', 26, 2, ring));
     add('ev-ac', markerImage('plug', '#4aa8a8', 24, 2, ring));
     add('fuel-pin', markerImage('fuel', '#34c759', 26, 2, ring));
+    add('toll', markerImage('ticket', '#ff9f0a', 24, 2, ring));
+    add('svc-services', markerImage('coffee', '#5e5ce6', 22, 2, ring));
+    add('svc-rest_area', markerImage('tree', '#7c8a6e', 20, 2, ring));
+    add('fire', markerImage('flame', '#ff453a', 28, 2, ring));
     await Promise.all(jobs);
   }
 
@@ -133,8 +145,10 @@ export class Layers {
       'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2, 12, 6] } }, before);
 
     // Route on top of the base roads.
+    add({ id: 'route-alt', type: 'line', source: 'route-alt', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': this.dark ? '#5a6b85' : '#8fa6c9', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 4, 14, 9], 'line-opacity': 0.9 } }, before);
     add({ id: 'route-casing', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': this.dark ? '#0b3d91' : '#0a4fc2', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 6, 14, 13] } }, before);
-    add({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0a84ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 14, 9] } }, before);
+    add({ id: 'route-line', type: 'line', source: 'route', filter: ['!=', ['get', 'toll'], true], layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0a84ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 14, 9] } }, before);
+    add({ id: 'route-toll', type: 'line', source: 'route', filter: ['==', ['get', 'toll'], true], layout: { 'line-cap': 'butt', 'line-join': 'round' }, paint: { 'line-color': '#ff9f0a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.5, 14, 9] } }, before);
 
     // Live congestion where cities publish it (Madrid sensors, Barcelona sections).
     const tcolor: ExpressionSpecification = ['match', ['get', 'state'], 1, '#30c15a', 2, '#ffcc00', 3, '#ff9500', 4, '#ff3b30', 5, '#7a0b0b', '#8e8e93'];
@@ -150,13 +164,33 @@ export class Layers {
     add({ id: 'inc-lines-casing', type: 'line', source: 'incident-lines', minzoom: 8, layout: { 'line-cap': 'round' }, paint: { 'line-color': halo, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 5, 14, 12] } }, before);
     add({ id: 'inc-lines', type: 'line', source: 'incident-lines', minzoom: 8, layout: { 'line-cap': 'round' }, paint: { 'line-color': catColor, 'line-width': ['interpolate', ['linear'], ['zoom'], 8, 3, 14, 8] } }, before);
 
+    // Toll motorways: an amber band over the road; booths and service areas closer in.
+    add({ id: 'toll-line', type: 'line', source: 'tolls', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#ff9f0a', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.75, 12, 0.55], 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 10, 4, 15, 10] } }, before);
+    add({ id: 'services-icon', type: 'symbol', source: 'tolls', minzoom: 10, filter: ['in', ['get', 'kind'], ['literal', ['services', 'rest_area']]],
+      layout: { 'icon-image': ['concat', 'svc-', ['get', 'kind']], 'icon-allow-overlap': false, 'symbol-sort-key': ['match', ['get', 'kind'], 'services', 0, 1] } });
+    add({ id: 'toll-booth', type: 'symbol', source: 'tolls', minzoom: 7, filter: ['==', ['get', 'kind'], 'booth'],
+      layout: { 'icon-image': 'toll', 'icon-allow-overlap': ['step', ['zoom'], false, 10, true], 'icon-size': ['interpolate', ['linear'], ['zoom'], 7, 0.7, 11, 1],
+        'text-field': ['step', ['zoom'], '', 11, ['get', 'name']], 'text-font': ['Noto Sans Medium'], 'text-size': 11.5, 'text-offset': [0, 1.3], 'text-anchor': 'top', 'text-optional': true },
+      paint: { 'text-color': text, 'text-halo-color': halo, 'text-halo-width': 1.6 } });
+
+    // Wildfires: burnt areas, then a glow and a flame for each active heat spot (chimneys hidden).
+    add({ id: 'burnt-fill', type: 'fill', source: 'fires', filter: ['==', ['get', 'kind'], 'burnt'], paint: { 'fill-color': this.dark ? '#8a4b2a' : '#7a3b1d', 'fill-opacity': 0.45, 'fill-outline-color': '#5a2a12' } }, before);
+    const hot: ExpressionSpecification = ['all', ['==', ['get', 'kind'], 'hotspot'], ['!=', ['get', 'persistent'], true]];
+    add({ id: 'fire-glow', type: 'circle', source: 'fires', filter: hot, paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, ['interpolate', ['linear'], ['get', 'frp'], 0, 5, 50, 10, 500, 22], 12, ['interpolate', ['linear'], ['get', 'frp'], 0, 18, 50, 36, 500, 70]],
+      'circle-color': '#ff6a00', 'circle-opacity': 0.25, 'circle-blur': 0.6 } });
+    add({ id: 'fire-dot', type: 'circle', source: 'fires', maxzoom: 8, filter: hot, paint: { 'circle-radius': 4, 'circle-color': '#ff453a', 'circle-stroke-color': halo, 'circle-stroke-width': 1.2 } });
+    add({ id: 'fire-icon', type: 'symbol', source: 'fires', minzoom: 8, filter: hot, layout: { 'icon-image': 'fire', 'icon-allow-overlap': true } });
+
     // Fuel: coloured dot by price percentile; price label when close.
     add({ id: 'fuel-dot', type: 'circle', source: 'fuel', paint: {
+      'circle-opacity': ['case', ['==', ['get', 'closed'], true], 0.3, 1], 'circle-stroke-opacity': ['case', ['==', ['get', 'closed'], true], 0.3, 1],
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 1.6, 9, 3.2, 12, 6, 15, 8],
       'circle-color': '#8e8e93', 'circle-stroke-color': halo, 'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 6, 0, 10, 1.2] } });
     add({ id: 'fuel-label', type: 'symbol', source: 'fuel', minzoom: 11.5, layout: {
       'text-field': '', 'text-font': ['Noto Sans Medium'], 'text-size': 12, 'text-offset': [0, 1.25], 'text-anchor': 'top',
-      'text-allow-overlap': false, 'symbol-sort-key': 0 }, paint: { 'text-color': text, 'text-halo-color': halo, 'text-halo-width': 1.8 } });
+      'text-allow-overlap': false, 'symbol-sort-key': 0 }, paint: { 'text-opacity': ['case', ['==', ['get', 'closed'], true], 0.45, 1], 'text-color': text, 'text-halo-color': halo, 'text-halo-width': 1.8 } });
 
     // Charging points.
     add({ id: 'ev-dot', type: 'circle', source: 'ev', maxzoom: 11, paint: {
@@ -212,6 +246,8 @@ export class Layers {
       radars: ['radar-dot', 'radar-icon', 'radar-sections', 'invive', 'motos', 'invive-ends', 'motos-ends'],
       fuel: ['fuel-dot', 'fuel-label'],
       ev: ['ev-dot', 'ev-icon', 'ev-live'],
+      tolls: ['toll-line', 'toll-booth', 'services-icon'],
+      fires: ['burnt-fill', 'fire-glow', 'fire-dot', 'fire-icon'],
       vms: ['vms-icon'],
       zbe: ['zbe-fill', 'zbe-line', 'zbe-label'],
       quakes: ['quake-dot'],
@@ -241,6 +277,7 @@ export class Layers {
       if (!fc) return;
       ok++;
       if (name === 'radars') await this.radarImages(fc);
+      if (name === 'fuel') markClosed(fc);
       this.data.set(name, fc);
       (this.map.getSource(name) as GeoJSONSource | undefined)?.setData(fc);
       this.onData(name, fc);
@@ -277,8 +314,22 @@ export class Layers {
     (this.map.getSource('selection') as GeoJSONSource | undefined)?.setData(f ? { type: 'Feature', geometry: { type: 'Point', coordinates: [f.lon, f.lat] }, properties: {} } : empty());
   }
 
-  setRoute(fc: FC | null): void {
+  private route: FC | null = null;
+  private routeAlt: FC | null = null;
+
+  setRoute(fc: FC | null, alt: FC | null = null): void {
+    this.route = fc;
+    this.routeAlt = alt;
     (this.map.getSource('route') as GeoJSONSource | undefined)?.setData(fc ?? empty());
+    (this.map.getSource('route-alt') as GeoJSONSource | undefined)?.setData(alt ?? empty());
+  }
+
+  /** Opening hours change with the clock, not with the data: re-mark closed stations. */
+  refreshOpen(): void {
+    const fc = this.data.get('fuel');
+    if (!fc) return;
+    markClosed(fc);
+    (this.map.getSource('fuel') as GeoJSONSource | undefined)?.setData(fc);
   }
 
   features(name: string): GeoJSON.Feature[] {
@@ -294,10 +345,21 @@ export function featureGroup(f: MapGeoJSONFeature): Group | 'ev-live' | null {
   if (s === 'fuel') return 'fuel';
   if (s === 'ev') return 'ev';
   if (s === 'ev-live') return 'ev-live';
+  if (s === 'tolls') return 'tolls';
+  if (s === 'fires') return 'fires';
   if (s === 'vms') return 'vms';
   if (s === 'zbe') return 'zbe';
   if (s === 'quakes') return 'quakes';
   return null;
+}
+
+/** Adds `closed: true` to the stations closed right now (by their published opening hours). */
+export function markClosed(fc: FC): void {
+  const now = new Date();
+  for (const f of fc.features) {
+    const p = f.properties as { hours?: string; prov?: string; closed?: boolean };
+    p.closed = openState(p.hours ?? '', p.prov ?? '', now).open === false;
+  }
 }
 
 export type { Cat };

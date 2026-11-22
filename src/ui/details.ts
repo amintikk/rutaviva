@@ -6,6 +6,7 @@ import {
 } from '../data.ts';
 import type { Layers } from '../map/layers.ts';
 import { lineChart } from './chart.ts';
+import { openState } from './hours.ts';
 import { icon, iconSvg, type IconName } from './icons.ts';
 import type { Sheet } from './sheet.ts';
 
@@ -16,7 +17,7 @@ export interface Ctx {
   open: (kind: Kind, props: Record<string, unknown>, lon: number, lat: number, push?: boolean) => void;
   routeTo: (lon: number, lat: number, label: string) => void;
 }
-export type Kind = 'congestion' | 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake';
+export type Kind = 'congestion' | 'incident' | 'camera' | 'radar' | 'stretch' | 'motos' | 'fuel' | 'ev' | 'evlive' | 'vms' | 'zbe' | 'quake' | 'toll' | 'fire';
 
 const h = (html: string): HTMLElement => {
   const d = document.createElement('div');
@@ -85,15 +86,7 @@ function actions(ctx: Ctx, lon: number, lat: number, label: string, share = true
   maps.rel = 'noopener';
   maps.append(icon('external', 16), 'Abrir en navegador GPS');
   bar.append(maps);
-  if (share && navigator.share) {
-    const s = document.createElement('button');
-    s.className = 'icon-btn ghost';
-    s.type = 'button';
-    s.setAttribute('aria-label', 'Compartir');
-    s.append(icon('share', 18));
-    s.addEventListener('click', () => void navigator.share({ title: label, url: location.href }).catch(() => {}));
-    bar.append(s);
-  }
+  void share; // sharing lives in the sheet header now
   return bar;
 }
 
@@ -274,12 +267,18 @@ export function fuel(ctx: Ctx, p: Station, lon: number, lat: number): void {
       const [cls, label] = priceClass(v, pct[code]);
       return `<tr><th>${esc(FUEL_LABEL[code] ?? code)}</th><td><b>${price(v)}</b></td><td>${cls ? `<span class="tag ${cls}">${label}</span>` : ''}</td></tr>`;
     }).join('')}</table>
-    <div class="rows">${p.hours ? row('clock', esc(p.hours.replace(/;/g, ' · '))) : ''}
+    <div class="rows">${p.hours ? row('clock', `${openLine(p)}${esc(p.hours.replace(/;/g, ' · '))}${openState(p.hours, p.prov).open === null ? '' : '</span>'}`) : ''}
     ${row('info', `Precios del Ministerio para la Transición Ecológica · ${esc(fc?.source_time ? `datos de ${fc.source_time.split(' ')[1]?.slice(0, 5) ?? ''}` : '')}`)}</div>
     <h3 class="sec">Historia del precio</h3><div class="hist"><p class="muted">Cargando…</p></div>`);
   el.append(actions(ctx, lon, lat, p.brand || 'Gasolinera'));
   ctx.sheet.show(p.brand || 'Gasolinera', `${p.muni} · ${p.prov}`, el);
   void history(el.querySelector('.hist')!, p.id, sel);
+}
+
+function openLine(p: Station): string {
+  const o = openState(p.hours, p.prov);
+  if (o.open === null) return '';
+  return `<b class="${o.open ? 'open-now' : 'closed-now'}">${esc(o.text)}</b><br><span class="muted">`;
 }
 
 async function history(box: HTMLElement, id: string, sel: string): Promise<void> {
@@ -458,4 +457,82 @@ export function congestion(ctx: Ctx, p: Congestion): void {
     ${p.flow ? row('car', `Intensidad: <b>${nf.format(p.flow)}</b> vehículos/hora`) : ''}
     ${row('info', p.city === 'Madrid' ? 'Sensores del Ayuntamiento de Madrid (Informo), cada 5 minutos.' : 'Estado del tráfico del Ayuntamiento de Barcelona, cada 5 minutos.')}</div>`);
   ctx.sheet.show(`Tráfico: ${label.toLowerCase()}`, p.city, el);
+}
+
+// ---------------------------------------------------------------- tolls and service areas
+
+export function toll(ctx: Ctx, p: Record<string, unknown>, lon: number, lat: number): void {
+  const kind = String(p.kind ?? '');
+  const name = String(p.name ?? '');
+  if (kind === 'services' || kind === 'rest_area') {
+    const svc = kind === 'services';
+    const el = h(`<div class="hero">${badge(svc ? 'coffee' : 'tree', svc ? '#5e5ce6' : '#7c8a6e')}<div>
+      <p class="kicker" style="color:${svc ? '#5e5ce6' : '#7c8a6e'}">${svc ? 'Área de servicio' : 'Área de descanso'}</p>
+      <p class="big">${esc(name || (svc ? 'Área de servicio' : 'Área de descanso'))}</p>${p.brand ? `<p class="muted">${esc(p.brand)}</p>` : ''}</div></div>
+      <p class="note">${svc ? 'Suele tener gasolinera, cafetería o restaurante y aseos.' : 'Zona para parar y descansar, normalmente sin más servicios.'}</p>
+      <div class="rows">${row('info', 'Fuente: comunidad de OpenStreetMap')}</div>`);
+    const fuel = near(ctx, 'fuel', lon, lat, 0.6, 1)[0];
+    if (fuel) {
+      const st = fuel.f.properties as Station;
+      const v = st[`p_${ctx.layers.fuel}`];
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn ghost';
+      b.append(icon('fuel', 16), `${st.brand || 'Gasolinera'}${typeof v === 'number' ? ` · ${price(v)}` : ''}`);
+      const [x, y] = (fuel.f.geometry as GeoJSON.Point).coordinates as [number, number];
+      b.addEventListener('click', () => ctx.open('fuel', st as unknown as Record<string, unknown>, x, y, true));
+      el.append(b);
+    }
+    el.append(actions(ctx, lon, lat, name || 'Área de servicio'));
+    ctx.sheet.show(svc ? 'Área de servicio' : 'Área de descanso', name, el);
+    return;
+  }
+  const road = String(p.ref ?? '').split(';')[0] ?? '';
+  if (kind === 'booth') {
+    const el = h(`<div class="hero">${badge('ticket', '#ff9f0a')}<div><p class="kicker" style="color:#c87800">Peaje</p>
+      <p class="big">${esc(name || 'Estación de peaje')}</p>${p.op ? `<p class="muted">${esc(p.op)}</p>` : ''}</div></div>
+      <div class="rows">${row('info', 'Ubicación de la estación de peaje según OpenStreetMap. El precio depende del tramo recorrido y del tipo de vehículo: consúltalo en la web de la concesionaria.')}</div>`);
+    el.append(actions(ctx, lon, lat, name || 'Peaje'));
+    ctx.sheet.show('Peaje', name, el);
+    return;
+  }
+  const el = h(`<div class="hero">${badge('ticket', '#ff9f0a')}<div><p class="kicker" style="color:#c87800">Autopista de peaje</p>
+    <p class="big">${esc(road || name || 'Vía de peaje')}</p>${name && road ? `<p class="muted">${esc(name)}</p>` : ''}${p.op ? `<p class="muted">${esc(p.op)}</p>` : ''}</div></div>
+    <p class="note">Tramo de pago. Si quieres evitarlo, el planificador de viajes tiene la opción «Sin peajes».</p>
+    <div class="rows">${row('info', 'Fuente: comunidad de OpenStreetMap')}</div>`);
+  ctx.sheet.show('Autopista de peaje', road, el);
+}
+
+// ---------------------------------------------------------------- wildfires
+
+export function fire(ctx: Ctx, p: Record<string, unknown>, lon: number, lat: number): void {
+  if (p.kind === 'burnt') {
+    const area = Number(p.area ?? 0);
+    const el = h(`<div class="hero">${badge('flame', '#7a3b1d')}<div><p class="kicker" style="color:#a0522d">Zona quemada</p>
+      <p class="big">${area ? `${nf.format(area)} ha` : 'Incendio reciente'}</p>${p.place ? `<p class="muted">${esc(p.place)}</p>` : ''}</div></div>
+      <div class="rows">${p.date ? row('calendar', `Detectado el ${esc(new Date(String(p.date)).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }))}`) : ''}
+      ${row('info', 'Superficie quemada cartografiada por satélite por el Sistema Europeo de Información sobre Incendios Forestales (EFFIS, Copernicus). Últimos 30 días.')}</div>`);
+    ctx.sheet.show('Zona quemada', String(p.place ?? ''), el);
+    return;
+  }
+  const n = Number(p.n ?? 1);
+  const frp = Number(p.frp ?? 0);
+  const strength = frp >= 100 ? 'muy intenso' : frp >= 25 ? 'intenso' : frp >= 5 ? 'moderado' : 'débil';
+  const roads = near(ctx, 'incidents', lon, lat, 10, 4);
+  const el = h(`<div class="hero">${badge('flame', '#ff453a')}<div><p class="kicker" style="color:#ff453a">Foco de calor detectado por satélite</p>
+    <p class="big">${n > 1 ? `${nf.format(n)} detecciones` : '1 detección'} <span class="muted">· ${strength}</span></p>
+    <p class="muted">Última: ${esc(ago(String(p.last)))}</p></div></div>
+    <p class="warn">${iconSvg('alert', 16)} Puede ser un incendio forestal, una quema agrícola o una fuente de calor industrial. Si ves humo, llama al 112.</p>
+    <div class="rows">${row('clock', `Primera detección ${esc(when(String(p.first)))}`)}
+    ${row('gauge', `Potencia radiativa: ${nf.format(frp)} MW`)}
+    ${row('info', 'Satélites VIIRS (NASA FIRMS). Cada píxel cubre unos 375 m; los datos llegan unas 3 horas después de cada paso.')}</div>`);
+  if (roads.length) {
+    const box = document.createElement('div');
+    box.innerHTML = '<h3 class="sec">Avisos de tráfico a menos de 10 km</h3>';
+    box.append(incidentList(ctx, roads.map((x) => x.f)));
+    el.append(box);
+  }
+  const strip = camStrip(ctx, lon, lat);
+  if (strip) el.append(strip);
+  ctx.sheet.show('Foco de calor', `${lat.toFixed(3)}, ${lon.toFixed(3)}`, el);
 }

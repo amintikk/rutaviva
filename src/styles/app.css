@@ -73,6 +73,8 @@ html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 .sheet-titles { flex: 1; min-width: 0; }
 .sheet-title { margin: 0; font-size: 21px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
 .sheet-sub { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; }
+.sheet-share { width: 30px; height: 30px; border-radius: 50%; color: var(--accent-ink); flex: none; }
+.sheet-share.done { color: var(--green); }
 .sheet-close { width: 30px; height: 30px; border-radius: 50%; background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--muted); flex: none; }
 .sheet-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 4px 16px 20px; }
 
@@ -253,3 +255,27 @@ ul.list button:hover { background: color-mix(in srgb, var(--text) 4%, transparen
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
+
+.open-now { color: var(--green); }
+.closed-now { color: var(--red); }
+.near-btn { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 5px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--accent-ink); cursor: pointer; border-left: 1px solid color-mix(in srgb, var(--text) 12%, transparent); margin-left: 2px; }
+.nearby-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.toggle-chip { border: 1px solid color-mix(in srgb, var(--text) 14%, transparent); background: transparent; color: var(--text); padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 550; cursor: pointer; }
+.toggle-chip[aria-pressed='true'] { background: var(--accent); border-color: transparent; color: #fff; }
+.route-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.route-cards { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.route-card { flex: 1 0 auto; min-width: 120px; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 9px 12px; border-radius: 12px; border: 1.5px solid transparent; background: color-mix(in srgb, var(--text) 5%, transparent); color: var(--text); cursor: pointer; text-align: left; font: inherit; }
+.route-card b { font-size: 16px; }
+.route-card span { font-size: 12.5px; color: var(--muted); }
+.route-card small { font-size: 12px; color: var(--accent-ink); font-weight: 600; }
+.route-card[aria-pressed='true'] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.trip > div.toll b { color: #c87800; }
+.trip-cost { padding: 12px; border-radius: 12px; background: color-mix(in srgb, var(--text) 5%, transparent); display: flex; flex-direction: column; gap: 6px; }
+.cost-main { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cost-value b { font-size: 20px; }
+.cost-main label { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.cost-main input { width: 58px; padding: 4px 6px; border-radius: 8px; border: 1px solid color-mix(in srgb, var(--text) 18%, transparent); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; text-align: right; }
+.chip.toll { background: color-mix(in srgb, #ff9f0a 22%, transparent); color: #a35f00; font-weight: 600; }
+.price-chip.svc { background: color-mix(in srgb, #5e5ce6 16%, transparent); color: #4643c4; }
+.warn.fire { background: color-mix(in srgb, #ff453a 14%, transparent); }
+.link-btn.inline { display: inline; padding: 0; font-weight: 600; }

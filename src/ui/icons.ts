@@ -5,7 +5,7 @@ import {
   CircleDot, Clock, CloudRain, Compass, Construction, Euro, ExternalLink, Flag, Fuel, Gauge, Info, Layers, Leaf, LoaderCircle,
   LocateFixed, MapPin, Menu, Minus, Moon, Mountain, Navigation, OctagonX, Plus, PlugZap, Radar, RectangleHorizontal, RefreshCw,
   Route, Search, Share2, ShieldAlert, Signpost, Snowflake, Sun, TrafficCone, TrendingDown, TrendingUp, TriangleAlert, Video, Waypoints,
-  X, Zap, Bike, Cctv, MoveHorizontal, CircleDot as Lights, type IconNode,
+  X, Zap, Bike, Cctv, MoveHorizontal, CircleDot as Lights, Flame, Coffee, Ticket, Link, Check, SlidersHorizontal, TreePine, type IconNode,
 } from 'lucide';
 
 export const ICONS = {
@@ -17,6 +17,7 @@ export const ICONS = {
   panel: RectangleHorizontal, refresh: RefreshCw, route: Route, search: Search, share: Share2, shield: ShieldAlert, road: Signpost,
   snow: Snowflake, sun: Sun, cone: TrafficCone, down: TrendingDown, up: TrendingUp, alert: TriangleAlert, video: Video,
   waypoints: Waypoints, x: X, zap: Zap, bike: Bike, cctv: Cctv, section: MoveHorizontal, lights: Lights,
+  flame: Flame, coffee: Coffee, ticket: Ticket, link: Link, check: Check, options: SlidersHorizontal, tree: TreePine,
 } satisfies Record<string, IconNode>;
 
 export type IconName = keyof typeof ICONS;

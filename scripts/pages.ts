@@ -61,7 +61,7 @@ function shell(p: Page): string {
 ${p.body}
 </main>
 <footer class="site-foot">
-<p><b>Ruta viva</b> reúne datos abiertos oficiales: DGT (Punto de Acceso Nacional), Servei Català de Trànsit, Tráfico del Gobierno Vasco, Ministerio para la Transición Ecológica, REVE (Red Eléctrica), Instituto Geográfico Nacional y OpenStreetMap. No es una web oficial ni está vinculada a esos organismos.</p>
+<p><b>Ruta viva</b> reúne datos abiertos oficiales: DGT (Punto de Acceso Nacional), Servei Català de Trànsit, Tráfico del Gobierno Vasco, Ministerio para la Transición Ecológica, REVE (Red Eléctrica), Instituto Geográfico Nacional, NASA FIRMS, Copernicus EFFIS y OpenStreetMap. No es una web oficial ni está vinculada a esos organismos.</p>
 <nav aria-label="Información legal"><a href="/acerca/">Acerca de</a><a href="/fuentes/">Fuentes y licencias</a><a href="/aviso-legal/">Aviso legal</a><a href="/privacidad/">Privacidad</a><a href="/terminos/">Términos</a><a href="#" data-consent-open>Cookies</a><a href="https://github.com/amintikk/rutaviva">Código</a></nav>
 </footer>
 <script type="module" src="${p.script ?? '/src/page.ts'}"></script>
@@ -135,7 +135,7 @@ const STATIC: Page[] = [
 <li><b>Cámaras</b>: la imagen se pide a la DGT como mucho cada 2 minutos; la lista de cámaras, cada 6 horas.</li>
 <li><b>Gasolineras</b>: precios cada 30 minutos; historia diaria desde 2007.</li>
 <li><b>Recarga</b>: estaciones cada día; estado y precio en tiempo real al consultarlas; recorrido completo cada noche.</li>
-<li><b>Radares, tramos y zonas de bajas emisiones</b>: cada pocas horas. Los radares combinan la lista oficial de la DGT con los que la comunidad de OpenStreetMap ha cartografiado (Cataluña, País Vasco, radares municipales y de semáforo); los segundos se distinguen en el mapa y en su ficha.</li><li><b>Terremotos</b>: cada 10 minutos.</li></ul>
+<li><b>Radares, tramos y zonas de bajas emisiones</b>: cada pocas horas. Los radares combinan la lista oficial de la DGT con los que la comunidad de OpenStreetMap ha cartografiado (Cataluña, País Vasco, radares municipales y de semáforo); los segundos se distinguen en el mapa y en su ficha.</li><li><b>Terremotos</b>: cada 10 minutos.</li><li><b>Incendios</b>: cada media hora. Los focos de calor llegan unas 3 horas después de cada paso del satélite; no todos son incendios forestales (también quemas agrícolas e industria). Los que se repiten en el mismo sitio muchos días, casi siempre fábricas, se ocultan.</li><li><b>Peajes y áreas de servicio</b>: con cada actualización del mapa de OpenStreetMap. No mostramos el precio de los peajes porque no hay una fuente abierta y actualizada.</li></ul>
 <h2>Lo que hay que saber</h2>
 <ul><li>Solo aparece lo que publican los organismos. Un accidente que la DGT no ha registrado no sale, y algunos avisos siguen activos después de resolverse.</li>
 <li>Las incidencias se clasifican automáticamente a partir de los códigos del estándar europeo DATEX II.</li>
@@ -156,6 +156,9 @@ const STATIC: Page[] = [
 <tr><td>Estaciones de recarga (datos fijos)</td><td>MITERD, vía el Punto de Acceso Nacional</td><td>CC BY 4.0</td></tr>
 <tr><td>Estado y precio de los puntos de recarga</td><td><a href="https://www.mapareve.es/">REVE</a>, Red Eléctrica, con datos de los operadores (Orden TED/445/2023)</td><td>Consulta del mapa público; se cachea y se consulta con moderación</td></tr>
 <tr><td>Radares que no están en la lista de la DGT y límite de velocidad de cada radar</td><td>© colaboradores de <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> (elementos <code>highway=speed_camera</code>)</td><td>ODbL</td></tr>
+<tr><td>Autopistas de peaje, estaciones de peaje y áreas de servicio</td><td>© colaboradores de <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a></td><td>ODbL</td></tr>
+<tr><td>Focos de calor por satélite</td><td><a href="https://firms.modaps.eosdis.nasa.gov/">NASA FIRMS</a> (VIIRS)</td><td>Uso libre con atribución</td></tr>
+<tr><td>Zonas quemadas</td><td><a href="https://forest-fire.emergency.copernicus.eu/">Copernicus EFFIS</a></td><td>Uso libre con atribución</td></tr>
 <tr><td>Terremotos</td><td><a href="https://www.ign.es/">Instituto Geográfico Nacional</a></td><td>CC BY 4.0</td></tr>
 <tr><td>Mapa base y rutas</td><td>© colaboradores de <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> (ODbL), teselas de <a href="https://protomaps.com">Protomaps</a>, rutas con <a href="https://valhalla.github.io/valhalla/">Valhalla</a></td><td>ODbL</td></tr>
 <tr><td>Relieve</td><td><a href="https://mapterhorn.com/attribution">Mapterhorn</a></td><td>Varias abiertas</td></tr>
@@ -172,7 +175,7 @@ const STATIC: Page[] = [
   {
     path: '/privacidad/', kind: 'legal', title: 'Política de privacidad · Ruta viva', description: 'Qué datos recoge Ruta viva y cómo se tratan.',
     body: prose(`<h1>Política de privacidad</h1><p><b>Responsable:</b> Amin Tahtah Toumi, <a href="mailto:amintahtahtoumi@gmail.com">amintahtahtoumi@gmail.com</a>.</p>
-<h2>Sin cuenta y sin datos personales</h2><p>Ruta viva no tiene registro ni formularios. Las búsquedas de lugares se envían a CartoCiudad (IGN) a través de nuestro servidor, sin tu dirección IP. Tu ubicación, si pulsas «Mi ubicación», se usa solo en tu navegador para centrar el mapa o calcular una ruta, y no se guarda.</p>
+<h2>Sin cuenta y sin datos personales</h2><p>Ruta viva no tiene registro ni formularios. Las búsquedas de lugares se envían a CartoCiudad (IGN) a través de nuestro servidor, sin tu dirección IP. Tu ubicación, si pulsas «Mi ubicación» o «Cerca», se usa solo en tu navegador para centrar el mapa o calcular una ruta, y no se guarda.</p>
 <h2>Medición de audiencia</h2><p>Solo si lo aceptas, usamos Google Analytics 4 con IP anonimizada para saber cuántas personas usan la web y qué partes. Si lo rechazas, no se instala ninguna cookie de medición. Puedes cambiar de opinión en «Cookies», al pie de cada página.</p>
 <h2>Preferencias guardadas en tu navegador</h2><p>Guardamos en el almacenamiento local de tu navegador el tema, las capas activas y el combustible elegido. No salen de tu dispositivo.</p>
 <h2>Registros del servidor</h2><p>El servidor no guarda registros de acceso con direcciones IP más allá de lo necesario para proteger el servicio frente a abusos.</p>

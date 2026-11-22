@@ -12,6 +12,10 @@ export class Sheet {
   private subEl: HTMLElement;
   private backBtn: HTMLButtonElement;
   private closeBtn: HTMLButtonElement;
+  private shareBtn: HTMLButtonElement;
+  private share: { url: string; title: string } | null = null;
+  /** Link to the next view shown (set just before `show`): adds a share button and puts it in the address bar. */
+  pendingShare: { param: string; title: string } | null = null;
   private stack: { render: () => void }[] = [];
   private snap: Snap = 'peek';
   onClose: () => void = () => {};
@@ -25,6 +29,7 @@ export class Sheet {
     this.el.innerHTML = `<div class="sheet-grip" aria-hidden="true"><span></span></div>
       <header class="sheet-head"><button class="icon-btn sheet-back" type="button" aria-label="Volver" hidden></button>
       <div class="sheet-titles"><h2 class="sheet-title"></h2><p class="sheet-sub"></p></div>
+      <button class="icon-btn sheet-share" type="button" aria-label="Compartir enlace" title="Compartir enlace" hidden></button>
       <button class="icon-btn sheet-close" type="button" aria-label="Cerrar" hidden></button></header>
       <div class="sheet-body"></div>`;
     parent.append(this.el);
@@ -34,6 +39,9 @@ export class Sheet {
     this.body = this.el.querySelector('.sheet-body')!;
     this.backBtn = this.el.querySelector('.sheet-back')!;
     this.closeBtn = this.el.querySelector('.sheet-close')!;
+    this.shareBtn = this.el.querySelector('.sheet-share')!;
+    this.shareBtn.append(icon('share', 17));
+    this.shareBtn.addEventListener('click', () => void this.doShare());
     this.backBtn.append(icon('chevronLeft', 22));
     this.closeBtn.append(icon('x', 18));
     this.backBtn.addEventListener('click', () => this.back());
@@ -44,7 +52,10 @@ export class Sheet {
   /** Show content. `push` keeps the previous view for the back button. */
   show(title: string, sub: string, content: HTMLElement | string, opts: { push?: boolean; snap?: Snap; closable?: boolean } = {}): HTMLElement {
     this.stamp++;
+    const share = this.pendingShare;
+    this.pendingShare = null;
     const render = () => {
+      this.setShare(share);
       this.titleEl.textContent = title;
       this.subEl.textContent = sub;
       this.subEl.hidden = !sub;
@@ -71,8 +82,41 @@ export class Sheet {
 
   close(): void {
     this.stack = [];
+    this.setShare(null);
     this.el.classList.remove('open');
     this.onClose();
+  }
+
+  private setShare(s: { param: string; title: string } | null): void {
+    const u = new URL(location.href);
+    if (s) u.searchParams.set('ver', s.param);
+    else u.searchParams.delete('ver');
+    if (u.href !== location.href) history.replaceState(history.state, '', u.href);
+    this.share = s ? { url: u.href.replace(/#.*$/, ''), title: s.title } : null;
+    this.shareBtn.hidden = !s;
+  }
+
+  private async doShare(): Promise<void> {
+    if (!this.share) return;
+    // With the map position, so it opens exactly as seen.
+    const url = `${this.share.url}${location.hash}`;
+    if (navigator.share && this.isMobile()) {
+      await navigator.share({ title: `${this.share.title} · Ruta viva`, url }).catch(() => {});
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      this.shareBtn.replaceChildren(icon('check', 17));
+      this.shareBtn.classList.add('done');
+      this.shareBtn.title = 'Enlace copiado';
+      window.setTimeout(() => {
+        this.shareBtn.replaceChildren(icon('share', 17));
+        this.shareBtn.classList.remove('done');
+        this.shareBtn.title = 'Compartir enlace';
+      }, 1800);
+    } catch {
+      window.prompt('Copia el enlace:', url);
+    }
   }
 
   get isOpen(): boolean {

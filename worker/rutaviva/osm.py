@@ -6,7 +6,9 @@ Valhalla already uses (no extra download):
   geometry of the section and its limit;
 - red-light cameras (`enforcement=traffic_signals` / `red_light_camera`);
 - kilometre posts (`highway=milestone` with `ref` and `distance`), used to place the DGT's
-  "road + kilometre" lists on the map.
+  "road + kilometre" lists on the map;
+- toll roads (`toll=yes`), toll booths (`barrier=toll_booth`) and service / rest areas
+  (`highway=services` / `rest_area`).
 """
 from __future__ import annotations
 
@@ -37,9 +39,18 @@ def read(pbf: Path = PBF) -> dict[str, Any]:
     cams: list[dict[str, Any]] = []
     milestones: list[tuple[str, float, float, float]] = []
     lights: list[dict[str, Any]] = []
-    # Pass 1: nodes we need directly (cameras, milestones).
-    for n in osmium.FileProcessor(str(pbf), osmium.osm.NODE).with_filter(osmium.filter.KeyFilter('highway')):
+    booths: list[dict[str, Any]] = []
+    services: list[dict[str, Any]] = []
+    # Pass 1: nodes we need directly (cameras, milestones, toll booths, service areas mapped as a point).
+    for n in osmium.FileProcessor(str(pbf), osmium.osm.NODE).with_filter(osmium.filter.KeyFilter('highway', 'barrier')):
+        if n.tags.get('barrier') == 'toll_booth':
+            booths.append({'id': f'osm:{n.id}', 'lon': round(n.location.lon, 6), 'lat': round(n.location.lat, 6),
+                           'name': n.tags.get('name', '')[:80], 'op': n.tags.get('operator', '')[:80]})
+            continue
         hw = n.tags.get('highway')
+        if hw in ('services', 'rest_area'):
+            services.append(_service(f'osm:{n.id}', n.tags, (round(n.location.lon, 6), round(n.location.lat, 6))))
+            continue
         if hw == 'speed_camera':
             t = {tag.k: tag.v for tag in n.tags}
             ms = t.get('maxspeed', '')
@@ -75,6 +86,21 @@ def read(pbf: Path = PBF) -> dict[str, Any]:
             way_nodes[w.id] = [nd.ref for nd in w.nodes]
             way_ref[w.id] = w.tags.get('ref', '')
             need_nodes.update(way_nodes[w.id])
+    # Toll roads and service areas mapped as an area.
+    toll_ways: list[dict[str, Any]] = []
+    area_ways: list[tuple[int, Any, list[int]]] = []
+    for w in osmium.FileProcessor(str(pbf), osmium.osm.WAY).with_filter(
+            osmium.filter.TagFilter(('toll', 'yes'), ('highway', 'services'), ('highway', 'rest_area'))):
+        hw = w.tags.get('highway', '')
+        nodes = [nd.ref for nd in w.nodes]
+        if hw in ('services', 'rest_area'):
+            area_ways.append((w.id, {t.k: t.v for t in w.tags}, nodes))
+        elif w.tags.get('toll') == 'yes' and hw in TOLL_HIGHWAYS:
+            toll_ways.append({'id': w.id, 'ref': w.tags.get('ref', ''), 'name': w.tags.get('name', '')[:80],
+                              'op': w.tags.get('operator', '')[:80], 'hw': hw, 'nodes': nodes})
+        else:
+            continue
+        need_nodes.update(nodes)
     loc: dict[int, tuple[float, float]] = {}
     if need_nodes:
         for n in osmium.FileProcessor(str(pbf), osmium.osm.NODE).with_filter(osmium.filter.IdFilter(need_nodes)):
@@ -97,7 +123,51 @@ def read(pbf: Path = PBF) -> dict[str, Any]:
             'maxspeed': int(r['tags']['maxspeed']) if r['tags'].get('maxspeed', '').isdigit() else None,
             'road': refs[0].split(';')[0] if refs else '', 'note': (r['tags'].get('description') or r['tags'].get('name') or '')[:160],
         })
-    return {'cameras': cams, 'milestones': milestones, 'sections': sections, 'lights': lights}
+    tolls = []
+    for t in toll_ways:
+        line = simplify([loc[n] for n in t.pop('nodes') if n in loc], 0.0002)
+        if len(line) > 1:
+            tolls.append({**t, 'line': line})
+    for wid, tags, nodes in area_ways:
+        pts = [loc[n] for n in nodes if n in loc]
+        if pts:
+            c = (round(sum(p[0] for p in pts) / len(pts), 6), round(sum(p[1] for p in pts) / len(pts), 6))
+            services.append(_service(f'osmw:{wid}', tags, c))
+    return {'cameras': cams, 'milestones': milestones, 'sections': sections, 'lights': lights,
+            'tolls': tolls, 'booths': booths, 'services': services}
+
+
+TOLL_HIGHWAYS = ('motorway', 'trunk', 'primary', 'secondary')
+
+
+def _service(id_: str, tags: Any, pt: tuple[float, float]) -> dict[str, Any]:
+    get = tags.get
+    return {'id': id_, 'lon': pt[0], 'lat': pt[1], 'kind': get('highway'), 'name': (get('name') or '')[:80],
+            'brand': (get('brand') or get('operator') or '')[:60]}
+
+
+def simplify(line: list[tuple[float, float]], tol: float) -> list[list[float]]:
+    """Douglas-Peucker in degrees (0.0002 ~ 20 m): enough detail to draw a road at any zoom."""
+    if len(line) < 3:
+        return [list(p) for p in line]
+    keep = [False] * len(line)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(line) - 1)]
+    while stack:
+        a, b = stack.pop()
+        (x1, y1), (x2, y2) = line[a], line[b]
+        dx, dy = x2 - x1, y2 - y1
+        n = math.hypot(dx, dy) or 1e-12
+        best, idx = 0.0, -1
+        for i in range(a + 1, b):
+            x, y = line[i]
+            d = abs(dy * (x - x1) - dx * (y - y1)) / n
+            if d > best:
+                best, idx = d, i
+        if best > tol and idx > 0:
+            keep[idx] = True
+            stack += [(a, idx), (idx, b)]
+    return [list(p) for p, k in zip(line, keep) if k]
 
 
 def speed_cameras(pbf: Path = PBF) -> list[dict[str, Any]]:

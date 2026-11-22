@@ -4,6 +4,7 @@ import type { LngLatBoundsLike } from 'maplibre-gl';
 import { CATS, esc, FUEL_LABEL, km, nf, price, titleCase, type Camera, type Charger, type FC, type Incident, type Radar, type Station, type Zone } from '../data.ts';
 import type { Ctx } from './details.ts';
 import { incidentList } from './details.ts';
+import { openState } from './hours.ts';
 import { icon, iconSvg } from './icons.ts';
 import { SearchBox, type Place } from './search.ts';
 
@@ -96,6 +97,60 @@ export class Corridor {
 
 interface Leg { from: Place; to: Place }
 
+interface Trip {
+  shape: [number, number][];
+  km: number;
+  secs: number;
+  tollKm: number;
+  tolls: [number, number][]; // shape index ranges on toll roads
+  tollRoads: string[];
+}
+
+interface Opts { noTolls: boolean; noHighways: boolean }
+const OPTS = 'rutaviva-route-opts';
+const CONS = 'rutaviva-consumo';
+
+function loadOpts(): Opts {
+  try {
+    const v = JSON.parse(localStorage.getItem(OPTS) ?? 'null');
+    if (v && typeof v === 'object') return { noTolls: !!v.noTolls, noHighways: !!v.noHighways };
+  } catch { /* defaults */ }
+  return { noTolls: false, noHighways: false };
+}
+
+function loadConsumption(): number {
+  try {
+    const v = Number(localStorage.getItem(CONS));
+    if (v >= 2 && v <= 30) return v;
+  } catch { /* default */ }
+  return 6.5;
+}
+
+const dur = (secs: number) => {
+  const h = Math.floor(secs / 3600);
+  const m = Math.round((secs % 3600) / 60);
+  return h ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min`;
+};
+
+function parseTrip(t: { legs: { shape: string; maneuvers: { toll?: boolean; length: number; begin_shape_index: number; end_shape_index: number; street_names?: string[] }[] }[]; summary: { length: number; time: number } }): Trip {
+  const shape: [number, number][] = [];
+  const tolls: [number, number][] = [];
+  const roads = new Set<string>();
+  let tollKm = 0;
+  for (const leg of t.legs) {
+    const off = shape.length ? shape.length - 1 : 0;
+    const pts = decode(leg.shape);
+    shape.push(...(shape.length ? pts.slice(1) : pts));
+    for (const m of leg.maneuvers) {
+      if (!m.toll) continue;
+      tollKm += m.length;
+      tolls.push([off + m.begin_shape_index, off + m.end_shape_index]);
+      for (const n of m.street_names ?? []) if (/^[A-Z]{1,3}-?\d/.test(n)) roads.add(n);
+    }
+  }
+  return { shape, km: t.summary.length, secs: t.summary.time, tollKm, tolls, tollRoads: [...roads] };
+}
+
 export class Planner {
   private ctx: Ctx;
   private leg: Partial<Leg> = {};
@@ -103,6 +158,10 @@ export class Planner {
   private boxTo: SearchBox;
   private el: HTMLElement;
   private out: HTMLElement;
+  private opts = loadOpts();
+  private trips: Trip[] = [];
+  private sel = 0;
+  private runId = 0;
 
   constructor(ctx: Ctx) {
     this.ctx = ctx;
@@ -135,10 +194,29 @@ export class Planner {
       }, () => { me.textContent = 'No se pudo obtener tu ubicación'; }, { enableHighAccuracy: true, timeout: 10000 });
     });
     fields.append(this.boxFrom.el, swap, this.boxTo.el);
+    const optRow = document.createElement('div');
+    optRow.className = 'route-opts';
+    for (const [key, label] of [['noTolls', 'Sin peajes'], ['noHighways', 'Sin autopistas ni autovías']] as const) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'toggle-chip';
+      b.dataset.opt = key;
+      b.setAttribute('aria-pressed', String(this.opts[key]));
+      b.textContent = label;
+      b.addEventListener('click', () => this.setOpt(key, !this.opts[key]));
+      optRow.append(b);
+    }
     this.out = document.createElement('div');
     this.out.className = 'planner-out';
-    this.el.append(fields, me, this.out);
+    this.el.append(fields, me, optRow, this.out);
     this.boxFrom.local = this.boxTo.local = () => [];
+    // Tap a grey alternative on the map to choose it.
+    ctx.map.on('click', 'route-alt', (e) => {
+      const i = Number(e.features?.[0]?.properties?.idx);
+      if (Number.isInteger(i) && this.trips[i]) this.choose(i);
+    });
+    ctx.map.on('mouseenter', 'route-alt', () => { ctx.map.getCanvas().style.cursor = 'pointer'; });
+    ctx.map.on('mouseleave', 'route-alt', () => { ctx.map.getCanvas().style.cursor = ''; });
   }
 
   open(dest?: Place): void {
@@ -151,47 +229,88 @@ export class Planner {
     else if (!this.leg.from) this.boxFrom.input.focus();
   }
 
+  private setOpt(key: keyof Opts, v: boolean): void {
+    this.opts[key] = v;
+    try { localStorage.setItem(OPTS, JSON.stringify(this.opts)); } catch { /* ignore */ }
+    this.el.querySelector(`[data-opt="${key}"]`)?.setAttribute('aria-pressed', String(v));
+    void this.run();
+  }
+
   private set(which: 'from' | 'to', p: Place): void {
     this.leg[which] = p;
     if (this.leg.from && this.leg.to) void this.run();
   }
 
+  private async request(from: Place, to: Place, opts: Opts, alternates: number): Promise<Trip[]> {
+    const body = {
+      locations: [{ lat: from.lat, lon: from.lon }, { lat: to.lat, lon: to.lon }],
+      costing: 'auto',
+      costing_options: { auto: { use_tolls: opts.noTolls ? 0 : 0.5, use_highways: opts.noHighways ? 0 : 1 } },
+      alternates, units: 'kilometers', language: 'es-ES', directions_options: { units: 'kilometers', language: 'es-ES' },
+    };
+    const r = await fetch('/route/route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!r.ok || !j.trip) throw new Error(j?.error ?? `HTTP ${r.status}`);
+    return [j.trip, ...((j.alternates ?? []) as { trip: unknown }[]).map((a) => a.trip)].map((t) => parseTrip(t as Parameters<typeof parseTrip>[0]));
+  }
+
   private async run(): Promise<void> {
     const { from, to } = this.leg;
     if (!from || !to) return;
+    const id = ++this.runId;
     this.out.innerHTML = `<p class="muted loading">${iconSvg('loader', 16)} Calculando la ruta…</p>`;
     try {
-      const body = {
-        locations: [{ lat: from.lat, lon: from.lon }, { lat: to.lat, lon: to.lon }],
-        costing: 'auto', units: 'kilometers', language: 'es-ES', directions_options: { units: 'kilometers', language: 'es-ES' },
-      };
-      const r = await fetch('/route/route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      const j = await r.json();
-      if (!r.ok || !j.trip) throw new Error(j?.error ?? `HTTP ${r.status}`);
-      const shape: [number, number][] = j.trip.legs.flatMap((l: { shape: string }) => decode(l.shape));
-      const dist = j.trip.summary.length as number;
-      const secs = j.trip.summary.time as number;
-      await this.render(from, to, shape, dist, secs);
+      const trips = await this.request(from, to, this.opts, 2);
+      if (id !== this.runId) return;
+      // Drop alternatives that are much worse than the best one.
+      const best = trips[0]!;
+      this.trips = trips.filter((t, i) => i === 0 || t.secs <= best.secs * 1.35);
+      this.sel = 0;
+      const all = this.trips.flatMap((t) => t.shape);
+      const xs = all.map((p) => p[0]);
+      const ys = all.map((p) => p[1]);
+      const pad = this.ctx.sheet.isMobile() ? { top: 90, bottom: window.innerHeight * 0.5, left: 30, right: 30 } : { top: 80, bottom: 60, left: 440, right: 80 };
+      this.ctx.map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]] as LngLatBoundsLike, { padding: pad, duration: 900 });
+      await this.render(from, to, id);
     } catch (e) {
+      if (id !== this.runId) return;
       this.out.innerHTML = `<p class="warn">No se pudo calcular la ruta: ${esc((e as Error).message)}. El calculador de rutas cubre España peninsular, Baleares y Canarias por separado.</p>`;
       this.ctx.layers.setRoute(null);
     }
   }
 
-  private async render(from: Place, to: Place, shape: [number, number][], distKm: number, secs: number): Promise<void> {
-    const { ctx } = this;
-    ctx.layers.setRoute({ type: 'FeatureCollection', features: [
-      { type: 'Feature', geometry: { type: 'LineString', coordinates: shape }, properties: {} },
+  private choose(i: number): void {
+    const { from, to } = this.leg;
+    if (!from || !to) return;
+    this.sel = i;
+    void this.render(from, to, this.runId);
+  }
+
+  private draw(from: Place, to: Place): void {
+    const trip = this.trips[this.sel]!;
+    const feats: GeoJSON.Feature[] = [{ type: 'Feature', geometry: { type: 'LineString', coordinates: trip.shape }, properties: {} }];
+    for (const [a, b] of trip.tolls) {
+      if (b > a) feats.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: trip.shape.slice(a, b + 1) }, properties: { toll: true } });
+    }
+    feats.push(
       { type: 'Feature', geometry: { type: 'Point', coordinates: [from.lon, from.lat] }, properties: { end: 'from' } },
       { type: 'Feature', geometry: { type: 'Point', coordinates: [to.lon, to.lat] }, properties: { end: 'to' } },
-    ] } as FC);
-    const xs = shape.map((p) => p[0]);
-    const ys = shape.map((p) => p[1]);
-    const pad = ctx.sheet.isMobile() ? { top: 90, bottom: window.innerHeight * 0.5, left: 30, right: 30 } : { top: 80, bottom: 60, left: 440, right: 80 };
-    ctx.map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]] as LngLatBoundsLike, { padding: pad, duration: 900 });
+    );
+    const alts = this.trips.map((t, idx) => ({ t, idx })).filter((x) => x.idx !== this.sel)
+      .map(({ t, idx }) => ({ type: 'Feature', geometry: { type: 'LineString', coordinates: t.shape }, properties: { idx } }) as GeoJSON.Feature);
+    this.ctx.layers.setRoute({ type: 'FeatureCollection', features: feats } as FC, { type: 'FeatureCollection', features: alts } as FC);
+  }
+
+  private async render(from: Place, to: Place, runId: number): Promise<void> {
+    const { ctx } = this;
+    const trip = this.trips[this.sel]!;
+    const { shape, km: distKm, secs } = trip;
+    this.draw(from, to);
     const cor = new Corridor(shape);
     // Make sure the layers we look along the route are loaded even if hidden.
-    await Promise.all((['traffic', 'radars', 'cameras', 'fuel', 'ev', 'zbe'] as const).map((g) => (ctx.layers.get(g === 'traffic' ? 'incidents' : g === 'radars' ? 'radars' : g) ? null : ctx.layers.load(g))));
+    await Promise.all((['traffic', 'radars', 'cameras', 'fuel', 'ev', 'zbe', 'tolls', 'fires'] as const)
+      .map((g) => (ctx.layers.get(ctx.layers.sources(g)[0]!) ? null : ctx.layers.load(g).catch(() => {}))));
+    if (runId !== this.runId) return;
     const along = <P>(source: string, max: number, filter: (p: P) => boolean = () => true) =>
       ctx.layers.features(source).map((f) => {
         const pt = f.geometry.type === 'Point' ? (f.geometry.coordinates as [number, number]) : null;
@@ -199,33 +318,107 @@ export class Planner {
         return m && filter(f.properties as P) ? { f, p: f.properties as P, off: m[0], at: m[1], pt: pt! } : null;
       }).filter(<T>(x: T | null): x is T => !!x).sort((a, b) => a.at - b.at);
 
-    const inc = along<Incident>('incidents', 250, (p) => p.cat !== 'obras' || true);
+    const inc = along<Incident>('incidents', 250);
     const serious = inc.filter((x) => ['accidente', 'cerrada', 'nieve', 'retencion', 'meteo', 'obstaculo'].includes(x.p.cat));
     const rad = along<Radar>('radars', 120);
     const cams = along<Camera>('cameras', 300);
     const fuelCode = ctx.layers.fuel;
     const fuel = along<Station>('fuel', 1500, (p) => typeof p[`p_${fuelCode}`] === 'number' && p.public);
     const ev = along<Charger>('ev', 1500, (p) => p.dc && p.kw >= 50);
+    const services = along<{ kind: string; name: string; brand: string }>('tolls', 350, (p) => p.kind === 'services');
+    const booths = along<{ kind: string; name: string }>('tolls', 150, (p) => p.kind === 'booth');
+    const fires = along<{ kind: string; persistent?: boolean; last: string }>('fires', 5000, (p) => p.kind === 'hotspot' && !p.persistent);
     const zones = ctx.layers.features('zbe').filter((f) => {
       const g = f.geometry as GeoJSON.MultiPolygon;
       return g.coordinates.some((poly) => inside([to.lon, to.lat], poly[0] as [number, number][]));
     }).map((f) => f.properties as unknown as Zone);
 
-    const hrs = Math.floor(secs / 3600);
-    const mins = Math.round((secs % 3600) / 60);
     const cheapest = [...fuel].sort((a, b) => (a.p[`p_${fuelCode}`] as number) - (b.p[`p_${fuelCode}`] as number)).slice(0, 5);
-    const median = fuel.length ? (fuel.map((x) => x.p[`p_${fuelCode}`] as number).sort((a, b) => a - b)[Math.floor(fuel.length / 2)]!) : 0;
+    const prices = fuel.map((x) => x.p[`p_${fuelCode}`] as number).sort((a, b) => a - b);
+    const median = prices.length ? prices[Math.floor(prices.length / 2)]! : (ctx.layers.get('fuel')?.pct?.[fuelCode]?.[2] ?? 0);
     const el = document.createElement('div');
-    el.innerHTML = `<div class="trip"><div><b>${hrs ? `${hrs} h ` : ''}${mins} min</b><span>${nf.format(Math.round(distKm))} km</span></div>
-      <div><b>${serious.length}</b><span>avisos</span></div><div><b>${rad.length}</b><span>radares</span></div><div><b>${cams.length}</b><span>cámaras</span></div></div>
-      ${zones.length ? `<p class="warn">${iconSvg('leaf', 16)} El destino está en una zona de bajas emisiones: ${zones.map((z) => esc(z.name)).join(', ')}.</p>` : ''}`;
+    el.innerHTML = `<div class="trip"><div><b>${dur(secs)}</b><span>${nf.format(Math.round(distKm))} km</span></div>
+      <div><b>${serious.length}</b><span>avisos</span></div><div><b>${rad.length}</b><span>radares</span></div>
+      <div class="${trip.tollKm >= 0.5 ? 'toll' : ''}"><b>${trip.tollKm >= 0.5 ? `${nf.format(Math.round(trip.tollKm))} km` : 'No'}</b><span>${trip.tollKm >= 0.5 ? 'de peaje' : 'hay peajes'}</span></div></div>
+      ${zones.length ? `<p class="warn">${iconSvg('leaf', 16)} El destino está en una zona de bajas emisiones: ${zones.map((z) => esc(z.name)).join(', ')}.</p>` : ''}
+      ${fires.length ? `<p class="warn fire">${iconSvg('flame', 16)} ${fires.length === 1 ? 'Hay un foco de calor' : `Hay ${fires.length} focos de calor`} detectado por satélite a menos de 5 km de la ruta en las últimas 48 h.</p>` : ''}`;
     const sec = (title: string, node: HTMLElement | string) => {
       const box = document.createElement('section');
       box.innerHTML = `<h3 class="sec">${title}</h3>`;
       if (typeof node === 'string') box.insertAdjacentHTML('beforeend', node);
       else box.append(node);
       el.append(box);
+      return box;
     };
+
+    // Route choices.
+    if (this.trips.length > 1) {
+      const cards = document.createElement('div');
+      cards.className = 'route-cards';
+      const fastest = Math.min(...this.trips.map((t) => t.secs));
+      this.trips.forEach((t, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'route-card';
+        b.setAttribute('aria-pressed', String(i === this.sel));
+        const extra = t.secs - fastest;
+        b.innerHTML = `<b>${dur(t.secs)}</b><span>${nf.format(Math.round(t.km))} km${t.tollKm >= 0.5 ? ` · ${nf.format(Math.round(t.tollKm))} km de peaje` : ' · sin peajes'}</span>
+          <small>${extra < 60 ? 'La más rápida' : `+${dur(extra)}`}</small>`;
+        b.addEventListener('click', () => this.choose(i));
+        cards.append(b);
+      });
+      el.insertBefore(cards, el.firstChild);
+    }
+
+    // Trip cost: fuel at the price along the way, and tolls.
+    const cost = document.createElement('div');
+    cost.className = 'trip-cost';
+    const consumption = loadConsumption();
+    const label = FUEL_LABEL[fuelCode] ?? fuelCode;
+    cost.innerHTML = `<div class="cost-main"><span class="cost-value"></span><label>Consumo <input type="number" inputmode="decimal" min="2" max="30" step="0.1" value="${consumption}" aria-label="Consumo en litros cada 100 km"> l/100 km</label></div>
+      <p class="muted small cost-note"></p>`;
+    const input = cost.querySelector('input')!;
+    const paint = () => {
+      const c = Math.min(30, Math.max(2, Number(input.value.replace(',', '.')) || 6.5));
+      const litres = (distKm * c) / 100;
+      const cheap = cheapest[0] ? (cheapest[0].p[`p_${fuelCode}`] as number) : 0;
+      cost.querySelector('.cost-value')!.innerHTML = median ? `<b>${nf.format(Math.round(litres * median))} €</b> de ${esc(label.toLowerCase())}` : 'Sin precio de referencia';
+      cost.querySelector('.cost-note')!.textContent = median
+        ? `${nf.format(Math.round(litres))} l a ${price(median)}/l (precio mediano en la ruta)${cheap && cheap < median ? `; llenando en la más barata del camino, ${nf.format(Math.round(litres * cheap))} €` : ''}.${trip.tollKm >= 0.5 ? ' El peaje se paga aparte: su precio depende de la concesionaria y del vehículo.' : ''}`
+        : '';
+      try { localStorage.setItem(CONS, String(c)); } catch { /* ignore */ }
+    };
+    input.addEventListener('input', paint);
+    paint();
+    sec('Coste del viaje', cost);
+
+    // Tolls on this route, and what avoiding them costs in time.
+    if (trip.tollKm >= 0.5) {
+      const box = sec('Peajes en la ruta', `<p class="small">${trip.tollRoads.map((r) => `<span class="chip toll">${esc(r)}</span>`).join(' ')} ${nf.format(Math.round(trip.tollKm))} km de pago${booths.length ? ` · ${booths.length} ${booths.length === 1 ? 'estación de peaje' : 'estaciones de peaje'}${booths.some((b) => b.p.name) ? `: ${booths.filter((b) => b.p.name).slice(0, 6).map((b) => esc(b.p.name)).join(', ')}` : ''}` : ''}.</p>`);
+      if (!this.opts.noTolls) {
+        const cmp = document.createElement('p');
+        cmp.className = 'small muted';
+        cmp.textContent = 'Calculando la alternativa sin peajes…';
+        box.append(cmp);
+        void this.request(from, to, { ...this.opts, noTolls: true }, 0).then(([t]) => {
+          if (!t || runId !== this.runId) return;
+          const dt = t.secs - secs;
+          const dk = t.km - distKm;
+          cmp.className = 'small';
+          cmp.innerHTML = t.tollKm >= 0.5 ? 'No hay una alternativa razonable sin peajes.'
+            : `Sin peajes: <b>${dur(t.secs)}</b> (${dt >= 60 ? `+${dur(dt)}` : 'el mismo tiempo'}, ${dk >= 0 ? '+' : '−'}${nf.format(Math.abs(Math.round(dk)))} km). `;
+          if (t.tollKm < 0.5) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'link-btn inline';
+            b.textContent = 'Ir sin peajes';
+            b.addEventListener('click', () => this.setOpt('noTolls', true));
+            cmp.append(b);
+          }
+        }).catch(() => cmp.remove());
+      }
+    }
+
     if (inc.length) sec(`En la ruta ahora (${inc.length})`, incidentList(ctx, inc.slice(0, 30).map((x) => x.f)));
     else sec('En la ruta ahora', '<p class="muted">Sin incidencias publicadas en el recorrido.</p>');
     if (cheapest.length) {
@@ -233,10 +426,11 @@ export class Planner {
       ul.className = 'list';
       for (const x of cheapest) {
         const v = x.p[`p_${fuelCode}`] as number;
+        const o = openState(x.p.hours, x.p.prov);
         const li = document.createElement('li');
         const b = document.createElement('button');
         b.type = 'button';
-        b.innerHTML = `<span class="price-chip">${price(v)}</span><span><b>${esc(x.p.brand)}</b><br><small>${esc(titleCase(x.p.muni))} · km ${nf.format(Math.round(x.at / 1000))} de la ruta${x.off > 300 ? ` · desvío ${nf.format(Math.round(x.off / 100) / 10)} km` : ''}</small></span>
+        b.innerHTML = `<span class="price-chip">${price(v)}</span><span><b>${esc(x.p.brand)}</b><br><small>${esc(titleCase(x.p.muni))} · km ${nf.format(Math.round(x.at / 1000))} de la ruta${x.off > 300 ? ` · desvío ${nf.format(Math.round(x.off / 100) / 10)} km` : ''}${o.open === false ? ' · <span class="closed-now">cerrada ahora</span>' : ''}</small></span>
           <small class="muted">${median && v < median ? `−${Math.round((median - v) * 50)} € en 50 l` : ''}</small>`;
         b.addEventListener('click', () => {
           ctx.map.flyTo({ center: x.pt, zoom: 14 });
@@ -245,7 +439,25 @@ export class Planner {
         li.append(b);
         ul.append(li);
       }
-      sec(`${esc(FUEL_LABEL[fuelCode] ?? fuelCode)} más barata en el camino`, ul);
+      sec(`${esc(label)} más barata en el camino`, ul);
+    }
+    if (services.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'list';
+      const step = Math.max(1, Math.ceil(services.length / 10));
+      for (const x of services.filter((_, i) => i % step === 0)) {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.innerHTML = `<span class="price-chip svc">km ${nf.format(Math.round(x.at / 1000))}</span><span><b>${esc(x.p.name || 'Área de servicio')}</b>${x.p.brand ? `<br><small>${esc(x.p.brand)}</small>` : ''}</span>`;
+        b.addEventListener('click', () => {
+          ctx.map.flyTo({ center: x.pt, zoom: 15 });
+          ctx.open('toll', x.p as unknown as Record<string, unknown>, x.pt[0], x.pt[1], true);
+        });
+        li.append(b);
+        ul.append(li);
+      }
+      sec(`Áreas de servicio (${services.length})`, ul);
     }
     if (ev.length) {
       const ul = document.createElement('ul');
@@ -282,10 +494,10 @@ export class Planner {
     }
     const note = document.createElement('p');
     note.className = 'muted small';
-    note.textContent = 'Tiempo estimado sin tráfico, calculado con OpenStreetMap. Avisos a menos de 250 m del trazado; gasolineras y cargadores a menos de 1,5 km.';
+    note.textContent = 'Tiempo estimado sin tráfico, calculado con OpenStreetMap. En naranja, los tramos de peaje; en gris, otras rutas posibles (tócalas para elegirlas). Avisos a menos de 250 m del trazado; gasolineras y cargadores a menos de 1,5 km.';
     el.append(note);
     void CATS;
-    this.out.replaceChildren(el);
+    if (runId === this.runId) this.out.replaceChildren(el);
   }
 }
 

@@ -19,6 +19,7 @@ import aiohttp
 from aiohttp import web
 
 from . import feeds as F
+from . import fires as FI
 from . import fuelhist as H
 from . import dgt_radares as DR
 from . import enforcement as E
@@ -339,6 +340,52 @@ class Worker:
                                          {'type': 'MultiPoint', 'coordinates': [list(x['line'][0]), list(x['line'][-1])]}))
             write_json(name, collection(feats))
 
+    async def tolls(self) -> None:
+        """Toll roads, toll booths and service areas from the OpenStreetMap extract."""
+        osm = await self.osm_data()
+        if not osm.get('tolls'):
+            raise RuntimeError('osm-enforcement.json sin peajes: ./deploy.sh worker')
+        feats = [feature(0, 0, {'id': f"toll:{t['id']}", 'kind': 'road', 'ref': t['ref'], 'name': t['name'], 'op': t['op']},
+                         {'type': 'LineString', 'coordinates': t['line']}) for t in osm['tolls']]
+        # Booths: one per plaza (OSM often maps one node per carriageway).
+        kept: list[dict] = []
+        grid: dict[tuple[int, int], list[dict]] = {}
+        for b in osm.get('booths', []):
+            cx, cy = int(b['lon'] * 200), int(b['lat'] * 200)
+            close = [k for dx in (-1, 0, 1) for dy in (-1, 0, 1) for k in grid.get((cx + dx, cy + dy), [])
+                     if abs(b['lon'] - k['lon']) * 85 + abs(b['lat'] - k['lat']) * 111 < 0.4]
+            if not close:
+                kept.append(b)
+                grid.setdefault((cx, cy), []).append(b)
+        feats += [feature(b['lon'], b['lat'], {'id': b['id'], 'kind': 'booth', 'name': b['name'], 'op': b['op']}) for b in kept]
+        feats += [feature(x['lon'], x['lat'], {'id': x['id'], 'kind': x['kind'], 'name': x['name'], 'brand': x['brand']})
+                  for x in osm.get('services', [])]
+        write_json('tolls', collection(feats, generated=now_iso()))
+        self.meta.ok('tolls', len(feats), f"{len(osm['tolls'])} tramos, {len(kept)} peajes, {len(osm.get('services', []))} áreas")
+
+    async def fires(self) -> None:
+        names = list(FI.FIRMS_FILES)
+        res = await asyncio.gather(*(self.get(FI.FIRMS_FILES[n], timeout=60) for n in names), self.get(FI.EFFIS, timeout=120),
+                                   return_exceptions=True)
+        notes = [f'{n}: {r}' for n, r in zip(names + ['EFFIS'], res) if isinstance(r, BaseException)]
+        files = {n: r for n, r in zip(names, res) if not isinstance(r, BaseException)}
+        if not files:
+            raise RuntimeError('; '.join(notes))
+        spots = FI.hotspots(files)
+        hist_path = DATA_DIR / 'fire-cells.json'
+        history = FI.record(spots, json.loads(hist_path.read_text()) if hist_path.exists() else {}, dt.date.today())
+        hist_path.write_text(json.dumps(history))
+        cutoff = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        groups = FI.cluster([s for s in spots if s['when'] >= cutoff])
+        FI.mark_persistent(groups, history)
+        feats = [feature(g['lon'], g['lat'], {k: v for k, v in g.items() if k not in ('lon', 'lat')} | {'kind': 'hotspot'}) for g in groups]
+        areas = [] if isinstance(res[-1], BaseException) else FI.burnt(res[-1])
+        feats += [feature(0, 0, {k: v for k, v in a.items() if k != 'rings' and v not in (None, '')} | {'kind': 'burnt'},
+                          {'type': 'MultiPolygon', 'coordinates': [[r] for r in a['rings']]}) for a in areas]
+        write_json('fires', collection(feats, generated=now_iso(), errors=notes))
+        active = sum(1 for g in groups if not g['persistent'])
+        self.meta.ok('fires', active, f"{len(groups) - active} persistentes, {len(areas)} áreas quemadas; {'; '.join(notes)}")
+
     async def zbe(self) -> None:
         index = (await self.get(URLS['zbe_index'])).decode('utf-8', 'replace')
         files = sorted(set(re.findall(r'href="([A-Za-z0-9_.-]+\.xml)"', index)))
@@ -536,7 +583,7 @@ class Worker:
 
     async def api_health(self, _request: web.Request) -> web.Response:
         stale = []
-        limits = {'incidents': 900, 'vms': 900, 'traffic': 1800, 'fuel': 7200, 'cameras': 86400, 'quakes': 3600}
+        limits = {'incidents': 900, 'vms': 900, 'traffic': 1800, 'fuel': 7200, 'cameras': 86400, 'quakes': 3600, 'fires': 10800}
         for feed, lim in limits.items():
             st = self.meta.state.get(feed) or {}
             upd = st.get('updated')
@@ -565,6 +612,8 @@ class Worker:
             self.every('cameras', 6 * 3600, self.cameras, delay=20),
             self.every('radars', 3 * 3600, self.radars, delay=25),
             self.every('zbe', 24 * 3600, self.zbe, delay=30),
+            self.every('tolls', 24 * 3600, self.tolls, delay=35),
+            self.every('fires', 1800, self.fires, delay=45),
             self.every('ev', 24 * 3600, self.ev, delay=40),
             self.every('incident_stats', 3600, self.incident_stats, delay=120),
             self.every('nightly', 6 * 3600, self.nightly, delay=90),
