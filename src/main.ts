@@ -216,7 +216,7 @@ function openDetail(kind: D.Kind, props: Record<string, unknown>, lon: number, l
   track('detail', { kind });
 }
 
-const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'radar-sections', 'motos', 'invive', 'zbe-fill'];
+const PRIORITY = ['inc-points', 'inc-dots', 'inc-dots-far', 'ev-live', 'cam-icon', 'vms-icon', 'radar-icon', 'fuel-label', 'fuel-dot', 'ev-icon', 'ev-dot', 'cam-dot', 'radar-dot', 'quake-dot', 'radar-sections', 'motos', 'invive', 'motos-ends', 'invive-ends', 'zbe-fill'];
 map.on('click', (e) => {
   const pad = mobile ? 12 : 6;
   const feats = map.queryRenderedFeatures([[e.point.x - pad, e.point.y - pad], [e.point.x + pad, e.point.y + pad]], { layers: CLICKABLE.filter((l) => map.getLayer(l)) });

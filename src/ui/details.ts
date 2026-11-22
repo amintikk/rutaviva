@@ -205,6 +205,7 @@ export function stretch(ctx: Ctx, p: Record<string, unknown>, kind: 'stretch' | 
     <p class="kicker" style="color:${color}">${motos ? 'Tramo peligroso para motos' : 'Tramo de vigilancia intensificada (INVIVE)'}</p>
     <p class="big">${esc(p.road)} <span class="muted">${k1 != null && k2 != null ? `km ${nf.format(k1)} a ${nf.format(k2)}` : esc(km(k1))}</span></p>
     ${p.prov ? `<p class="muted">${esc(titleCase(String(p.prov)))}</p>` : ''}</div></div>
+    ${p.ends ? '<p class="warn">No hemos podido trazar este tramo sobre la carretera: los círculos marcan su inicio y su fin.</p>' : ''}
     <p class="note">${motos ? 'Tramo señalizado con alta siniestralidad de motocicletas: la DGT recomienda extremar la precaución y aumenta la vigilancia.' : 'Tramo donde la DGT intensifica los controles de velocidad, normalmente con radares móviles.'}</p>`);
   ctx.sheet.show(motos ? 'Tramo de riesgo para motos' : 'Tramo vigilado', String(p.road ?? ''), el);
 }

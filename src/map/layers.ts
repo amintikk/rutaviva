@@ -24,7 +24,7 @@ const SOURCES: Record<Group, string[]> = {
 };
 
 export const CLICKABLE = ['inc-points', 'inc-dots', 'inc-dots-far', 'cam-icon', 'cam-dot', 'radar-icon', 'radar-dot', 'radar-sections', 'invive', 'motos',
-  'fuel-dot', 'fuel-label', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot'];
+  'fuel-dot', 'fuel-label', 'ev-dot', 'ev-icon', 'ev-live', 'vms-icon', 'zbe-fill', 'quake-dot', 'invive-ends', 'motos-ends'];
 
 const empty = (): FC => ({ type: 'FeatureCollection', features: [] });
 
@@ -105,6 +105,9 @@ export class Layers {
     // Enforcement stretches: wide translucent bands.
     add({ id: 'invive', type: 'line', source: 'invive', minzoom: 7, layout: { 'line-cap': 'round' }, paint: { 'line-color': '#ff2d55', 'line-opacity': 0.28, 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 9] } }, before);
     add({ id: 'motos', type: 'line', source: 'motos', minzoom: 7, layout: { 'line-cap': 'round' }, paint: { 'line-color': '#af52de', 'line-opacity': 0.4, 'line-width': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 8] } }, before);
+    // Stretches without a reliable road geometry: just their two ends.
+    add({ id: 'invive-ends', type: 'circle', source: 'invive', minzoom: 7, filter: ['==', ['geometry-type'], 'MultiPoint'], paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 6], 'circle-color': '#ff2d55', 'circle-opacity': 0.45, 'circle-stroke-color': '#ff2d55', 'circle-stroke-width': 1.5 } }, before);
+    add({ id: 'motos-ends', type: 'circle', source: 'motos', minzoom: 7, filter: ['==', ['geometry-type'], 'MultiPoint'], paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 7, 3, 12, 6], 'circle-color': '#af52de', 'circle-opacity': 0.45, 'circle-stroke-color': '#af52de', 'circle-stroke-width': 1.5 } }, before);
     add({ id: 'radar-sections', type: 'line', source: 'radar-sections', layout: { 'line-cap': 'round' }, paint: { 'line-color': '#ff2d55', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2, 12, 6], 'line-dasharray': [1.5, 1] } }, before);
 
     // Route on top of the base roads.
@@ -173,7 +176,7 @@ export class Layers {
     return {
       traffic: ['inc-lines-casing', 'inc-lines', 'inc-dots-far', 'inc-dots', 'inc-points'],
       cameras: ['cam-dot', 'cam-icon'],
-      radars: ['radar-dot', 'radar-icon', 'radar-sections', 'invive', 'motos'],
+      radars: ['radar-dot', 'radar-icon', 'radar-sections', 'invive', 'motos', 'invive-ends', 'motos-ends'],
       fuel: ['fuel-dot', 'fuel-label'],
       ev: ['ev-dot', 'ev-icon', 'ev-live'],
       vms: ['vms-icon'],

@@ -120,22 +120,38 @@ class Worker:
         self.con.commit()
         self.meta.ok('incidents', len(recs), '; '.join(errors))
 
-    async def snap(self, items: list[tuple[str, list[tuple[float, float]]]], budget: int = 200,
+    async def _route(self, a: tuple[float, float], b: tuple[float, float], radius: int,
+                     shortest: bool = False) -> tuple[float, list] | None:
+        body = {'locations': [{'lat': a[1], 'lon': a[0], 'radius': radius}, {'lat': b[1], 'lon': b[0], 'radius': radius}],
+                'costing': 'auto', 'costing_options': {'auto': {'shortest': shortest}}, 'directions_type': 'none'}
+        assert self.session
+        async with self.session.post('http://rutaviva-valhalla:8002/route', json=body,
+                                     timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status >= 500:
+                raise RuntimeError(f'valhalla {resp.status}')
+            if resp.status != 200:
+                return None
+            j = await resp.json()
+            return j['trip']['summary']['length'], decode6(j['trip']['legs'][0]['shape'])
+
+    async def snap(self, items: list[tuple[str, list[tuple[float, float]], float | None]], budget: int = 200,
                    keep_short: float = 1.5) -> dict[str, list[list[float]]]:
         """Follow the road between the first and last point of each item with Valhalla, so a stretch
-        is drawn along the carriageway, not as a straight line. Results are cached per id and position;
-        a stretch is only kept when the route is plausible (no big detour). Short ones fall back to
-        the straight segment when Valhalla cannot route them."""
+        is drawn along the carriageway, not as a straight line. Both directions are tried (a one-way
+        carriageway can force a detour in one of them) and the result must match the length the
+        source declares (km to km) or, without it, not be a big detour. Cached per id and position.
+        When no route is plausible, stretches shorter than `keep_short` km keep the straight segment
+        and longer ones get no line at all (a straight line across the country would be misleading)."""
         self.con.execute('CREATE TABLE IF NOT EXISTS incident_geom (id TEXT, key TEXT, geom TEXT, PRIMARY KEY (id, key))')
         out: dict[str, list[list[float]]] = {}
-        for item_id, pts in items:
+        for item_id, pts, expected in items:
             if len(pts) < 2:
                 continue
             (x1, y1), (x2, y2) = pts[0], pts[-1]
             straight = math.hypot((x2 - x1) * 85, (y2 - y1) * 111)  # km, good enough at Spanish latitudes
-            if straight < 0.05 or straight > 90:
+            if straight < 0.05 or straight > 150:
                 continue
-            key = f'{x1:.5f},{y1:.5f},{x2:.5f},{y2:.5f}'
+            key = f'v3|{x1:.5f},{y1:.5f},{x2:.5f},{y2:.5f}'
             row = self.con.execute('SELECT geom FROM incident_geom WHERE id=? AND key=?', (item_id, key)).fetchone()
             if row:
                 if row[0]:
@@ -144,20 +160,26 @@ class Worker:
             if budget <= 0:
                 continue
             budget -= 1
+
+            def plausible(length: float) -> bool:
+                if expected and expected > 0.3:
+                    return expected * 0.7 - 1 <= length <= expected * 1.35 + 2
+                return length <= straight * 1.8 + 1.5
+
             geom = None
             try:
-                body = {'locations': [{'lat': y1, 'lon': x1, 'radius': 60}, {'lat': y2, 'lon': x2, 'radius': 60}],
-                        'costing': 'auto', 'directions_type': 'none'}
-                assert self.session
-                async with self.session.post('http://rutaviva-valhalla:8002/route', json=body,
-                                             timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                    if resp.status == 200:
-                        j = await resp.json()
-                        length = j['trip']['summary']['length']
-                        if length <= straight * 1.8 + 1.5:
-                            geom = [[round(c, 5) for c in p] for p in decode6(j['trip']['legs'][0]['shape'])]
-                    elif resp.status >= 500:
-                        raise RuntimeError(f'valhalla {resp.status}')
+                best = None
+                # The fastest route often leaves the road (a faster motorway nearby); the shortest one
+                # follows the road itself, which is what a stretch "from km X to km Y" means.
+                for radius, shortest in ((60, False), (60, True), (250, True)):
+                    for a, b in (((x1, y1), (x2, y2)), ((x2, y2), (x1, y1))):
+                        r = await self._route(a, b, radius, shortest)
+                        if r and plausible(r[0]) and (best is None or r[0] < best[0]):
+                            best = r
+                    if best:
+                        break
+                if best:
+                    geom = [[round(c, 5) for c in p] for p in best[1]]
             except Exception:  # noqa: BLE001 - Valhalla busy or not ready: retry next round
                 break
             if geom is None and straight < keep_short:
@@ -170,7 +192,8 @@ class Worker:
         return out
 
     async def snap_lines(self, recs: list[dict]) -> dict[str, list[list[float]]]:
-        return await self.snap([(r['id'], r['pts']) for r in recs if len(r['pts']) == 2])
+        return await self.snap([(r['id'], r['pts'], abs(r['km2'] - r['km']) if r.get('km') is not None and r.get('km2') is not None else None)
+                                for r in recs if len(r['pts']) == 2])
 
     async def osm_cameras(self) -> list[dict]:
         """Speed cameras from the local OpenStreetMap extract, re-read only when the file changes."""
@@ -217,7 +240,7 @@ class Worker:
                for r in rs]
         pts += [feature(o['lon'], o['lat'], {'id': o['id'], 'kind': o['kind'], 'src': 'osm', 'maxspeed': o['maxspeed'],
                                              'dir': o['direction'], 'note': o['note']}) for o in extra]
-        snapped = await self.snap([(f"radar:{r['id']}", r['line']) for r in rs if r.get('line')], budget=100, keep_short=99)
+        snapped = await self.snap([(f"radar:{r['id']}", r['line'], r.get('len')) for r in rs if r.get('line')], budget=100, keep_short=99)
         tramos = [feature(0, 0, {'id': r['id'], 'road': r['road'], 'km': r['km'], 'km2': r.get('km2'), 'len': r.get('len')},
                           {'type': 'LineString', 'coordinates': snapped.get(f"radar:{r['id']}") or [list(p) for p in r['line']]})
                   for r in rs if r.get('line')]
@@ -225,12 +248,20 @@ class Worker:
         write_json('radar-sections', collection(tramos))
         for name, blob in (('invive', inv), ('motos', mot)):
             st = F.stretches(blob)
-            snapped = await self.snap([(f"{name}:{x['id']}", x['line']) for x in st if len(x['line']) == 2],
-                                      budget=2000, keep_short=99)
-            write_json(name, collection([feature(0, 0, {k: v for k, v in x.items() if k != 'line' and v not in (None, '')},
-                                                 {'type': 'LineString' if len(x['line']) > 1 else 'Point',
-                                                  'coordinates': snapped.get(f"{name}:{x['id']}") or ([list(p) for p in x['line']]
-                                                  if len(x['line']) > 1 else list(x['line'][0]))}) for x in st]))
+            span = lambda x: abs(x['km2'] - x['km']) if x.get('km') is not None and x.get('km2') is not None else None  # noqa: E731
+            snapped = await self.snap([(f"{name}:{x['id']}", x['line'], span(x)) for x in st if len(x['line']) == 2],
+                                      budget=2000, keep_short=1.0)
+            feats = []
+            for x in st:
+                props = {k: v for k, v in x.items() if k != 'line' and v not in (None, '')}
+                geom = snapped.get(f"{name}:{x['id']}")
+                if geom:
+                    feats.append(feature(0, 0, props, {'type': 'LineString', 'coordinates': geom}))
+                else:
+                    # No reliable road geometry: mark where the stretch starts and ends instead of a straight line.
+                    feats.append(feature(0, 0, {**props, 'ends': True},
+                                         {'type': 'MultiPoint', 'coordinates': [list(x['line'][0]), list(x['line'][-1])]}))
+            write_json(name, collection(feats))
         self.meta.ok('radars', len(pts), f'{len(rs)} DGT + {len(extra)} OpenStreetMap')
 
     async def zbe(self) -> None:
