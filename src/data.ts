@@ -7,7 +7,7 @@ export type FC<P = Record<string, unknown>> = GeoJSON.FeatureCollection<GeoJSON.
 
 export interface Incident {
   id: string; src: 'dgt' | 'sct' | 'gv'; cat: Cat; road?: string; km?: number; km2?: number; dir?: string; prov?: string;
-  muni?: string; start?: string; end?: string; sev?: string; what?: string; txt?: string; closure?: string; days?: number;
+  muni?: string; start?: string; end?: string; sev?: string; what?: string; txt?: string; closure?: string; days?: number; v16?: number;
 }
 export interface Congestion { id: string; city: string; name: string; state: number; load?: number; flow?: number }
 export const TRAFFIC_STATE: Record<number, [string, string]> = { 1: ['Fluido', '#30c15a'], 2: ['Denso', '#e0b400'], 3: ['Muy denso', '#ff9500'], 4: ['Congestión', '#ff3b30'], 5: ['Cortado', '#7a0b0b'] };
@@ -42,6 +42,9 @@ export const CATS: Record<Cat, { label: string; plural: string; color: string; i
   otro: { label: 'Aviso', plural: 'Otros avisos', color: '#8e8e93', icon: 'info', rank: 8 },
 };
 
+/** Connected V16 warning beacons (DGT 3.0). */
+export const V16_COLOR = '#ff6a00';
+
 export const SRC: Record<string, string> = { dgt: 'DGT', sct: 'Servei Català de Trànsit', gv: 'Tráfico del Gobierno Vasco' };
 
 // DATEX II enum values kept by the worker, in plain Spanish.
@@ -60,6 +63,8 @@ export const WHAT: Record<string, string> = {
   winterEquipmentMandatory: 'Equipamiento de invierno obligatorio', heavyVehicle: 'Afecta a camiones', carOrLightVehicle: 'Afecta a turismos',
   motorcycle: 'Afecta a motos', anyVehicle: 'Todos los vehículos', mandatory: 'Obligatorio', advisory: 'Recomendación',
   bothWays: 'Ambos sentidos', positive: 'Sentido creciente', negative: 'Sentido decreciente',
+  northBound: 'Hacia el norte', southBound: 'Hacia el sur', eastBound: 'Hacia el este', westBound: 'Hacia el oeste',
+  northEastBound: 'Hacia el noreste', northWestBound: 'Hacia el noroeste', southEastBound: 'Hacia el sureste', southWestBound: 'Hacia el suroeste',
   allLanesCompleteCarriageway: 'Todos los carriles', hardShoulder: 'Arcén', leftLane: 'Carril izquierdo', rightLane: 'Carril derecho',
   centralLane: 'Carril central', roadClearance: 'Limpieza de calzada', roadMarkingWork: 'Pintado de marcas viales',
   resurfacingWork: 'Reasfaltado', maintenanceWork: 'Mantenimiento', sportsEvent: 'Prueba deportiva', march: 'Marcha',

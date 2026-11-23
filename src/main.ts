@@ -7,7 +7,7 @@ import { WORKER_URL } from './map/worker.ts';
 import { Protocol } from 'pmtiles';
 import './styles/tokens.css';
 import './styles/app.css';
-import { ago, CATS, esc, FUELS, live, nf, price, type Cat, type FC } from './data.ts';
+import { ago, CATS, esc, FUELS, live, nf, price, V16_COLOR, type Cat, type FC } from './data.ts';
 import { CLICKABLE, featureGroup, GROUPS, Layers, type Group } from './map/layers.ts';
 import { baseStyle } from './map/style.ts';
 import { initConsent, track } from './ui/consent.ts';
@@ -106,6 +106,30 @@ for (const g of GROUPS) {
   b.addEventListener('click', () => void toggle(g.id));
   chips.append(b);
 }
+// With a mouse, the wheel and a drag scroll the chip row sideways (touch screens already do).
+chips.addEventListener('wheel', (e) => {
+  if (chips.scrollWidth <= chips.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  chips.scrollLeft += e.deltaMode === 1 ? e.deltaY * 32 : e.deltaY;
+}, { passive: false });
+let chipDrag: { x: number; left: number; moved: boolean } | null = null;
+let chipDragged = false;
+chips.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button === 0) chipDrag = { x: e.clientX, left: chips.scrollLeft, moved: false };
+});
+window.addEventListener('pointermove', (e) => {
+  if (!chipDrag) return;
+  const dx = e.clientX - chipDrag.x;
+  if (!chipDrag.moved && Math.abs(dx) > 5) { chipDrag.moved = true; chips.classList.add('dragging'); }
+  if (chipDrag.moved) chips.scrollLeft = chipDrag.left - dx;
+});
+window.addEventListener('pointerup', () => {
+  if (chipDrag?.moved) { chipDragged = true; window.setTimeout(() => { chipDragged = false; }, 0); }
+  chipDrag = null;
+  chips.classList.remove('dragging');
+});
+// A drag is not a click on the chip it ended on.
+chips.addEventListener('click', (e) => { if (chipDragged) { e.stopPropagation(); e.preventDefault(); } }, true);
 const fuelSeg = document.createElement('div');
 fuelSeg.className = 'seg fuel-seg glass';
 fuelSeg.setAttribute('role', 'group');
@@ -309,6 +333,19 @@ async function showSummary(fromBoot = false): Promise<void> {
     b.addEventListener('click', () => {
       const list = feats.filter((f) => (f.properties as { cat: Cat }).cat === c).sort((x, y) => String((y.properties as { start?: string }).start ?? '').localeCompare(String((x.properties as { start?: string }).start ?? '')));
       sheet.show(CATS[c].plural, `${nf.format(list.length)} ahora en España`, D.incidentList(ctx, list.slice(0, 200)), { push: true });
+    });
+    grid.append(b);
+  }
+  const v16 = feats.filter((f) => (f.properties as { v16?: number }).v16);
+  if (v16.length) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cat-tile';
+    b.style.setProperty('--c', V16_COLOR);
+    b.innerHTML = `${iconSvg('siren', 18)}<b>${nf.format(v16.length)}</b><span>Balizas V16</span>`;
+    b.addEventListener('click', () => {
+      const list = [...v16].sort((x, y) => String((y.properties as { start?: string }).start ?? '').localeCompare(String((x.properties as { start?: string }).start ?? '')));
+      sheet.show('Balizas V16 activadas', `${nf.format(list.length)} vehículos detenidos con la baliza encendida`, D.incidentList(ctx, list.slice(0, 200)), { push: true });
     });
     grid.append(b);
   }

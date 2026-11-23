@@ -1,6 +1,6 @@
 // Data layers on top of the base map: sources, styling, visibility and periodic refresh.
 import type { ExpressionSpecification, GeoJSONSource, Map as MlMap, MapGeoJSONFeature } from 'maplibre-gl';
-import { CATS, live, type Cat, type FC } from '../data.ts';
+import { CATS, live, V16_COLOR, type Cat, type FC } from '../data.ts';
 import { openState } from '../ui/hours.ts';
 import { markerImage, radarImage, squareImage, type IconName } from '../ui/icons.ts';
 
@@ -108,6 +108,7 @@ export class Layers {
       jobs.push(p.then((img) => { if (!m.hasImage(id)) m.addImage(id, img, { pixelRatio: 2 }); }));
     };
     for (const [cat, c] of Object.entries(CATS)) add(`inc-${cat}`, markerImage(c.icon, c.color, 30, 2, ring));
+    add('inc-v16', markerImage('siren', V16_COLOR, 30, 2, ring));
     add('cam', squareImage('video', '#5856d6', 24));
     add('vms', squareImage('panel', '#d99a00', 24));
     add('alert-movil', markerImage('megaphone', '#ff9500', 30, 2, ring));
@@ -251,7 +252,7 @@ export class Layers {
       'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, ['case', ['<=', catRank, 3], 4, 2.4], 7.5, ['case', ['<=', catRank, 3], 6, 4]],
       'circle-color': catColor, 'circle-stroke-color': halo, 'circle-stroke-width': 1.2 } });
     add({ id: 'inc-points', type: 'symbol', source: 'incidents', minzoom: 7.5, layout: {
-      'icon-image': ['concat', 'inc-', ['get', 'cat']], 'icon-allow-overlap': true,
+      'icon-image': ['case', ['has', 'v16'], 'inc-v16', ['concat', 'inc-', ['get', 'cat']]], 'icon-allow-overlap': true,
       'symbol-sort-key': catRank,
       'icon-size': ['interpolate', ['linear'], ['zoom'], 7.5, ['case', ['>=', ['coalesce', ['get', 'days'], 0], 7], 0.62, 0.8], 12, ['case', ['>=', ['coalesce', ['get', 'days'], 0], 7], 0.78, 1]] },
       paint: { 'icon-opacity': ['case', ['>=', ['coalesce', ['get', 'days'], 0], 7], 0.6, 1] } });

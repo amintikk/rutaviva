@@ -1,7 +1,7 @@
 // Detail views for every kind of map feature, shown in the sheet.
 import type { Map as MlMap } from 'maplibre-gl';
 import {
-  ago, CATS, esc, FUEL_LABEL, FUELS, km, live, nf, price, SRC, titleCase, when, WHAT,
+  ago, CATS, esc, FUEL_LABEL, FUELS, km, live, nf, price, SRC, titleCase, V16_COLOR, when, WHAT,
   TRAFFIC_STATE, type Alert, type Camera, type Cat, type Charger, type Congestion, type FC, type Incident, type MobileZone, type Panel, type Quake, type Radar,
   type SourceStatus, type Station, type Zone,
 } from '../data.ts';
@@ -93,8 +93,13 @@ function actions(ctx: Ctx, lon: number, lat: number, label: string, share = true
 
 // ---------------------------------------------------------------- incidents
 
+/** How an incident looks: its category, or a V16 beacon (a stopped vehicle that switched one on). */
+export function incidentLook(p: Incident): { label: string; color: string; icon: IconName } {
+  return p.v16 ? { label: 'Baliza V16 activada', color: V16_COLOR, icon: 'siren' } : CATS[p.cat as Cat] ?? CATS.otro;
+}
+
 export function incident(ctx: Ctx, p: Incident, lon: number, lat: number): void {
-  const c = CATS[p.cat as Cat] ?? CATS.otro;
+  const c = incidentLook(p);
   const what = (p.what ?? '').split(',').filter((w) => w && WHAT[w] && !['mandatory', 'anyVehicle', 'unknown'].includes(w));
   const place = [titleCase(p.muni), titleCase(p.prov)].filter(Boolean).join(', ');
   const kms = p.km != null ? (p.km2 != null ? `del km ${nf.format(Math.min(p.km, p.km2))} al ${nf.format(Math.max(p.km, p.km2))}` : km(p.km)) : '';
@@ -105,12 +110,13 @@ export function incident(ctx: Ctx, p: Incident, lon: number, lat: number): void 
     ${place ? `<p class="muted">${esc(place)}</p>` : ''}</div></div>
     ${what.length ? `<div class="chips">${what.map((w) => `<span class="chip">${esc(WHAT[w])}</span>`).join('')}</div>` : ''}
     ${p.txt ? `<p class="note">${esc(titleCase(p.txt))}</p>` : ''}
+    ${p.v16 ? `<p class="note">Hay un vehículo detenido en la vía (avería o accidente) con la baliza V16 encendida. La baliza envía su posición a la DGT 3.0 y el aviso desaparece cuando se apaga. Reduce la velocidad y, si puedes, cámbiate de carril.</p>` : ''}
     ${old ? `<p class="muted small">Aviso de larga duración: lleva ${p.days} días publicado.</p>` : ''}
     <div class="rows">
       ${p.start ? row('clock', `Desde ${esc(when(p.start))} <span class="muted">(${esc(ago(p.start))})</span>`) : ''}
       ${p.end ? row('calendar', `Previsto hasta ${esc(when(p.end))}`) : ''}
       ${p.dir && !['unknown', 'unspecified'].includes(p.dir) ? row('road', esc(WHAT[p.dir] ?? p.dir)) : ''}
-      ${row('info', `Fuente: ${esc(SRC[p.src] ?? p.src)}`)}
+      ${row('info', `Fuente: ${p.v16 ? 'DGT 3.0 (baliza V16 conectada)' : esc(SRC[p.src] ?? p.src)}`)}
     </div>`);
   const strip = camStrip(ctx, lon, lat);
   if (strip) el.append(strip);
@@ -561,7 +567,7 @@ export function incidentList(ctx: Ctx, feats: GeoJSON.Feature[]): HTMLElement {
   ul.className = 'list';
   for (const f of feats) {
     const p = f.properties as unknown as Incident;
-    const c = CATS[p.cat] ?? CATS.otro;
+    const c = incidentLook(p);
     const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
     const li = document.createElement('li');
     const b = document.createElement('button');

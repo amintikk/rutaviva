@@ -122,6 +122,8 @@ def incidents(data: bytes, src: str) -> list[Rec]:
             'sev': sev,
             'what': what,
             'closure': closure,
+            # A connected V16 beacon switched on by a stopped vehicle reaches the DGT 3.0 platform.
+            'v16': 1 if text(r, 'sourceIdentification') == 'DGT3.0' and 'vehicleObstruction' in values else None,
             'txt': ' · '.join(dict.fromkeys(c for c in comments if c.upper() != road.upper()))[:400],
             # DATEX lists the "to" point before the "from" point; keep [from, to].
             'pts': [pts[1], pts[0]] if len(pts) >= 2 and pts[1] != pts[0] else [pts[0]],
