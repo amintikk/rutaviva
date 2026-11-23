@@ -21,6 +21,10 @@ HEADERS = {'Accept': 'application/json', 'Content-Type': 'application/json',
            'User-Agent': 'RutaViva/1.0 (+https://rutaviva.aminox.dev/fuentes/)'}
 
 
+class Blocked(RuntimeError):
+    """REVE refused the request (rate limit or bot protection): stop calling for a while."""
+
+
 class Reve:
     def __init__(self, session: aiohttp.ClientSession, min_interval: float = 0.35) -> None:
         self.s = session
@@ -28,8 +32,13 @@ class Reve:
         self.min_interval = min_interval
         self.last = 0.0
         self.cache: dict[str, tuple[float, Any]] = {}
+        self.blocked_until = 0.0  # monotonic time until which we do not call REVE at all
+        self.strikes = 0          # consecutive refusals: the pause doubles (15 min .. 6 h)
 
     async def _call(self, method: str, path: str, body: dict | None = None) -> Any:
+        # After a 429 (or a block page) nobody calls REVE until the pause is over.
+        if time.monotonic() < self.blocked_until:
+            raise Blocked(f'REVE nos ha limitado: en pausa {int(self.blocked_until - time.monotonic())} s más')
         async with self.lock:
             wait = self.min_interval - (time.monotonic() - self.last)
             if wait > 0:
@@ -37,9 +46,22 @@ class Reve:
             self.last = time.monotonic()
         async with self.s.request(method, BASE + path, json=body, headers=HEADERS,
                                   timeout=aiohttp.ClientTimeout(total=25)) as r:
-            data = await r.json(content_type=None)
+            raw = await r.read()
+            if r.status in (403, 429) or (r.status >= 500 and not raw.strip().startswith((b'{', b'['))):
+                try:
+                    retry = float(r.headers.get('Retry-After', ''))
+                except ValueError:
+                    retry = 0
+                self.strikes += 1
+                self.blocked_until = time.monotonic() + max(retry, min(6 * 3600, 900 * 2 ** (self.strikes - 1)))
+                raise Blocked(f'REVE {r.status}: {raw[:80]!r}')
+            try:
+                data = json.loads(raw) if raw else None
+            except ValueError:
+                raise RuntimeError(f'REVE {r.status}: respuesta no JSON {raw[:80]!r}') from None
             if r.status >= 400:
                 raise RuntimeError(f'REVE {r.status}: {str(data)[:120]}')
+            self.strikes = 0
             return data
 
     async def cached(self, key: str, ttl: float, fn) -> Any:
@@ -147,12 +169,14 @@ async def sweep(reve: Reve, con: sqlite3.Connection, log=print, pause: float = 1
                      for k, v in seen.items()])
     con.commit()
     log(f'reve sweep: {len(seen)} locations, {calls} calls')
-    missing = [r[0] for r in con.execute('SELECT id FROM charger WHERE owner IS NULL ORDER BY random() LIMIT 3000')]
+    missing = [r[0] for r in con.execute('SELECT id FROM charger WHERE owner IS NULL ORDER BY random() LIMIT 500')]
     got = 0
     for loc_id in missing:
         await asyncio.sleep(pause)
         try:
             d = await reve._call('GET', f'/locations/{loc_id}')
+        except Blocked:
+            break
         except Exception:  # noqa: BLE001 - a missing detail only delays this location
             continue
         owner = (d.get('owner') or {}).get('name') or '—'

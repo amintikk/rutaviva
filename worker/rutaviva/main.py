@@ -750,10 +750,13 @@ class Worker:
                 nxt = now.replace(hour=at_hour, minute=0, second=0, microsecond=0)
                 if nxt <= now:
                     nxt += dt.timedelta(days=1)
-                last = (self.meta.state.get(name) or {}).get('updated', '')
-                # Run at once if it never ran or the last run is older than a day.
-                if last and last[:10] >= (dt.datetime.now(dt.UTC).replace(tzinfo=None) - dt.timedelta(hours=26)).strftime('%Y-%m-%d') \
-                        and (self.meta.state.get(name) or {}).get('ok'):
+                st = self.meta.state.get(name) or {}
+                cutoff = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=26)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                # Run at once only if it never ran and has not failed lately, or the last good run is
+                # older than a day. A failure waits for the next scheduled hour (no retry on restart).
+                recent_ok = st.get('ok') and st.get('updated', '') >= cutoff
+                recent_fail = not st.get('ok') and st.get('failed_at', '') >= cutoff
+                if recent_ok or recent_fail:
                     await asyncio.sleep((nxt - now).total_seconds())
             t0 = time.monotonic()
             try:
@@ -763,6 +766,8 @@ class Worker:
                 log.error('%s failed: %s', name, e)
                 log.debug(traceback.format_exc())
                 self.meta.fail(name, str(e))
+                if at_hour is not None:
+                    continue  # recorded as failed: the check above now waits for the next scheduled hour
             if at_hour is None:
                 await asyncio.sleep(seconds)
 
