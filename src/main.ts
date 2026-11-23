@@ -163,7 +163,43 @@ try {
   }
 } catch { /* ignore */ }
 fuelSeg.hidden = !active.has('fuel');
-top.append(card, chips, fuelSeg);
+// "See all" button: on a wide screen the row looks fixed, so it can unfold into a grid of every layer.
+const chipsRow = document.createElement('div');
+chipsRow.className = 'chips-row';
+const moreBtn = document.createElement('button');
+moreBtn.type = 'button';
+moreBtn.className = 'chips-more glass';
+moreBtn.append(icon('chevronDown', 18));
+const moreCount = document.createElement('b');
+moreBtn.append(moreCount);
+chipsRow.append(chips, moreBtn);
+const setChipsOpen = (open: boolean) => {
+  chipsRow.classList.toggle('open', open);
+  moreBtn.setAttribute('aria-expanded', String(open));
+  const label = open ? 'Mostrar las capas en una fila' : 'Ver todas las capas';
+  moreBtn.setAttribute('aria-label', label);
+  moreBtn.title = label;
+  if (!open) chips.scrollLeft = 0;
+  try { localStorage.setItem('rutaviva-chips-open', open ? '1' : '0'); } catch { /* ignore */ }
+  updateChipsMore();
+};
+// How many chips do not fit in the row (shown on the button while folded); no button if all fit.
+function updateChipsMore(): void {
+  const open = chipsRow.classList.contains('open');
+  const box = chips.getBoundingClientRect();
+  const hidden = open ? 0 : [...chips.children].filter((c) => c.getBoundingClientRect().right > box.right - 8).length;
+  moreBtn.hidden = !open && hidden === 0;
+  moreCount.textContent = hidden ? `+${hidden}` : '';
+}
+moreBtn.addEventListener('click', () => setChipsOpen(!chipsRow.classList.contains('open')));
+chips.addEventListener('scroll', () => updateChipsMore(), { passive: true });
+new ResizeObserver(() => updateChipsMore()).observe(chips);
+let chipsOpen = false;
+try { chipsOpen = localStorage.getItem('rutaviva-chips-open') === '1'; } catch { /* ignore */ }
+setChipsOpen(chipsOpen);
+top.append(card, chipsRow, fuelSeg);
+// The detail sheet starts below the top bar, however tall the unfolded layers make it.
+new ResizeObserver(() => document.documentElement.style.setProperty('--top-h', `${top.getBoundingClientRect().bottom}px`)).observe(top);
 app.append(top);
 
 const controls = document.createElement('div');
