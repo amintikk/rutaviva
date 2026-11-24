@@ -104,7 +104,7 @@ export async function live<T = FC>(name: string, maxAge = 60): Promise<T> {
   return data;
 }
 
-export const nf = new Intl.NumberFormat('es-ES');
+export const nf = new Intl.NumberFormat('es-ES', { useGrouping: 'always' } as unknown as Intl.NumberFormatOptions);
 export const price = (v: number | undefined, digits = 3) => (v == null ? '—' : `${v.toLocaleString('es-ES', { minimumFractionDigits: digits, maximumFractionDigits: digits })} €`);
 
 export function km(v: number | undefined | null): string {

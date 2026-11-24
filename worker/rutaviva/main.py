@@ -67,6 +67,29 @@ CITY = {
 }
 
 
+def ev_summary(sites: list[dict], generated: str) -> dict:
+    """The charging network in numbers for the /recarga/ page (the full list is too heavy for it)."""
+    bands = [('Ultrarrápida (150 kW o más)', 150, 1e9), ('Rápida (50 a 149 kW)', 50, 150),
+             ('Semirrápida (22 a 49 kW)', 22, 50), ('Lenta (menos de 22 kW)', 0, 22)]
+    def tally(group: list[dict]) -> dict:
+        return {'stations': len(group), 'points': sum(s['points'] or 0 for s in group),
+                'fast': sum(1 for s in group if (s['kw'] or 0) >= 50)}
+    by_prov: dict[str, list[dict]] = {}
+    by_op: dict[str, list[dict]] = {}
+    conns: Counter = Counter()
+    for s in sites:
+        by_prov.setdefault(s['prov'] or '', []).append(s)
+        by_op.setdefault(s['op'] or '', []).append(s)
+        for k, v in s['conns'].items():
+            conns[k] += v
+    return {'generated': generated, **tally(sites),
+            'h24': sum(1 for s in sites if s['hours'] and s['hours'].count('00:00 - 23:59') >= 7),
+            'bands': [{'band': b, **tally([s for s in sites if lo <= (s['kw'] or 0) < hi])} for b, lo, hi in bands],
+            'provinces': sorted(({'prov': p, **tally(g)} for p, g in by_prov.items() if p), key=lambda x: -x['points']),
+            'operators': sorted(({'op': o, **tally(g)} for o, g in by_op.items() if o), key=lambda x: -x['points'])[:20],
+            'conns': conns.most_common(8)}
+
+
 class Worker:
     def __init__(self) -> None:
         self.meta = Meta()
@@ -661,6 +684,7 @@ class Worker:
                                                'dc': any(k in s['conns'] for k in ('CCS', 'CHAdeMO', 'Tesla')) and s['kw'] >= 40})
                  for s in sites]
         write_json('ev', collection(feats, generated=now_iso()))
+        write_json('ev-summary', ev_summary(sites, now_iso()))
         self.meta.ok('ev', len(feats))
 
     async def fuel(self) -> None:

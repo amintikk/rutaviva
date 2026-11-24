@@ -106,15 +106,23 @@ const STATIC: Page[] = [
 <section class="card cta"><h2>Encuentra la más barata cerca de ti</h2><p>En el mapa, activa <b>Gasolineras</b>: verde las más baratas, rojo las más caras. Toca una para ver su historia.</p><a class="btn" href="/?capas=fuel">Abrir el mapa de gasolineras</a></section>`,
   },
   {
-    path: '/recarga/', kind: 'ev', title: 'Puntos de recarga averiados y precio de cargar el coche eléctrico · Ruta viva',
-    description: 'Cuántos puntos de recarga públicos están averiados en España, qué operadores tienen más cargadores fuera de servicio y cuánto cuesta cargar según la potencia, con los datos en tiempo real de REVE (Red Eléctrica).',
-    body: `<header class="page-hero"><p class="eyebrow">Recarga eléctrica</p><h1>¿Funcionan los cargadores?</h1>
-<p class="lede">Desde 2023 los operadores de recarga deben comunicar el estado y el precio de cada punto. Cada noche recorremos el mapa oficial REVE y contamos cuántos están libres, en uso o averiados.</p></header>
+    path: '/recarga/', kind: 'ev', title: 'Puntos de recarga en España: cuántos hay, de qué potencia y si funcionan · Ruta viva',
+    description: 'La red pública de recarga del coche eléctrico en España: estaciones y puntos por provincia, potencia, conectores y operadores, y cuántos funcionan según los datos en tiempo real de REVE (Red Eléctrica).',
+    body: `<header class="page-hero"><p class="eyebrow">Recarga eléctrica</p><h1>La recarga eléctrica en España</h1>
+<p class="lede">Todas las estaciones públicas de recarga registradas en el Punto de Acceso Nacional: cuántas hay, dónde, de qué potencia y de quién. Y, con los datos en tiempo real de REVE, cuántas funcionan.</p></header>
+<section class="stat-row" id="ev-net"><p class="muted">Cargando…</p></section>
+<div class="grid-2">
+<section class="card"><h2>Por potencia</h2><p class="muted small">Estaciones según la potencia de su mejor punto: ultrarrápidas (150 kW o más), rápidas (50 a 149), semirrápidas (22 a 49) y lentas.</p><div id="ev-bands"></div></section>
+<section class="card"><h2>Conectores</h2><p class="muted small">Número de conectores de cada tipo en toda la red.</p><div id="ev-conns"></div></section>
+</div>
+<section class="card"><h2>Los operadores más grandes</h2><p class="muted small">Puntos de recarga de cada operador y cuántas de sus estaciones son rápidas (50 kW o más).</p><div id="ev-opsnet"></div></section>
+<section class="card"><div class="card-head"><h2>Por provincia</h2><label class="filter small"><span class="sr-only">Buscar provincia</span><input id="ev-prov-filter" type="search" placeholder="Busca tu provincia" autocomplete="off"></label></div><div id="ev-provs"></div></section>
+<section id="ev-live" class="stack"><div class="section-head"><h2>¿Funcionan?</h2><p class="muted">Desde 2023 los operadores deben comunicar el estado y el precio de cada punto. Cada noche recorremos el mapa oficial REVE y contamos cuántos están libres, en uso o averiados.</p></div>
 <section class="stat-row" id="ev-stats"><p class="muted">Cargando…</p></section>
-<section class="card"><h2>Operadores con más puntos averiados</h2><p class="muted small">Porcentaje de ubicaciones marcadas como «fuera de servicio» en el último recorrido. Operadores con al menos 25 ubicaciones.</p><div id="ev-ops"></div></section>
-<section class="card"><h2>Lo que cuesta cargar</h2><p class="muted small">Precio por kWh publicado por los operadores, IVA incluido, últimos 14 días.</p><div id="ev-prices"></div></section>
-<section class="card"><h2>Evolución</h2><div id="ev-hist"></div></section>
-<section class="card cta"><h2>Míralo en el mapa</h2><p>Activa <b>Recarga</b> y acércate: los puntos muestran si están libres, ocupados o averiados ahora mismo, con su precio.</p><a class="btn" href="/?capas=ev">Abrir el mapa de recarga</a></section>`,
+<section class="card ev-extra"><h2>Operadores con más puntos averiados</h2><p class="muted small">Porcentaje de ubicaciones marcadas como «fuera de servicio» en el último recorrido. Operadores con al menos 25 ubicaciones.</p><div id="ev-ops"></div></section>
+<section class="card ev-extra"><h2>Lo que cuesta cargar</h2><p class="muted small">Precio por kWh publicado por los operadores, IVA incluido, últimos 14 días.</p><div id="ev-prices"></div></section>
+<section class="card ev-extra"><h2>Evolución</h2><div id="ev-hist"></div></section></section>
+<section class="card cta"><h2>Míralo en el mapa</h2><p>Activa <b>Recarga</b> y acércate: cada estación muestra su potencia, sus conectores y su horario, y el estado y el precio de cada punto cuando REVE los publica.</p><a class="btn" href="/?capas=ev">Abrir el mapa de recarga</a></section>`,
   },
   {
     path: '/zbe/', kind: 'zbe', title: 'Zonas de bajas emisiones (ZBE) de España: mapa y qué etiquetas pueden entrar · Ruta viva',
@@ -213,10 +221,18 @@ function provName(p: string): string {
 
 const ROAD_RE = /^(AP|A|N|E|M|R|C|CV|CM|CL|EX|MU|AG|AC|PO|LU|OU|GR|SE|MA|CA|HU|AL|CO|J|JA|H|BA|CC|SA|ZA|LE|BU|P|VA|SG|AV|SO|TO|CR|GU|CU|TE|Z|L|LO|NA|GI|BI|SS|VI|B|BP|T|TF|GC|IB|PM|V|CS|AS|S|O)-?\d{1,4}[A-Z]?$/;
 
+/** "A7", "a 7" and "A-7" are the same road. */
+export const normRoad = (r: unknown) => String(r ?? '').toUpperCase().replace(/\s+/g, '').replace(/^([A-Z]+)(\d)/, '$1-$2');
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString('es-ES', { useGrouping: 'always' } as unknown as Intl.NumberFormatOptions)} ${n === 1 ? one : many}`;
+/** Sign colour of a road: blue for motorways, red for national roads, orange for the rest. */
+const shield = (road: string) => (/^(AP|A)-/.test(road) ? 'blue' : /^(N|E)-/.test(road) ? 'red' : 'orange');
+const roadGroup = (road: string) => (/^(AP|A)-/.test(road) ? 0 : /^(N|E)-/.test(road) ? 1 : 2);
+const GROUPS = ['Autopistas y autovías del Estado', 'Carreteras nacionales', 'Autonómicas, provinciales y accesos a ciudades'];
+
 function roadPages(): Page[] {
   const roads = new Map<string, { cams: F[]; radars: F[]; stretches: F[] }>();
   const add = (road: unknown, k: 'cams' | 'radars' | 'stretches', f: F) => {
-    const r = String(road ?? '').toUpperCase().replace(/\s+/g, '');
+    const r = normRoad(road);
     if (!ROAD_RE.test(r)) return;
     const e = roads.get(r) ?? { cams: [], radars: [], stretches: [] };
     e[k].push(f);
@@ -226,44 +242,81 @@ function roadPages(): Page[] {
   // Trailer-radar spots are not radars that are always there.
   for (const f of readLive('radars')) if (f.properties.kind !== 'remolque') add(f.properties.road, 'radars', f);
   for (const f of readLive('invive')) add(f.properties.road, 'stretches', f);
+  let stats: { since?: string; roads?: Record<string, number | string>[] } = {};
+  try { stats = JSON.parse(readFileSync(join(LIVE, 'incident-stats.json'), 'utf8')); } catch { /* first build */ }
+  const history = new Map<string, Record<string, number | string>>();
+  for (const r of stats.roads ?? []) {
+    const k = normRoad(r.road);
+    const prev = history.get(k);
+    history.set(k, prev ? Object.fromEntries(Object.entries(r).map(([c, v]) => [c, typeof v === 'number' ? v + Number(prev[c] ?? 0) : v])) : r);
+  }
+  const since = stats.since ? new Date(stats.since).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' }) : '';
   const pages: Page[] = [];
   const list: { road: string; slug: string; cams: number; radars: number; stretches: number }[] = [];
   const kmOf = (f: F) => Number(f.properties.km ?? 0);
-  for (const [road, e] of roads) {
-    const n = e.cams.length + e.radars.length;
-    if (n < 3) continue;
-    const s = slug(road);
-    list.push({ road, slug: s, cams: e.cams.length, radars: e.radars.length, stretches: e.stretches.length });
-    const provs = [...new Set([...e.cams, ...e.radars].map((f) => provName(String(f.properties.prov ?? ''))).filter(Boolean))].slice(0, 8);
+  for (const [road, e] of roads) if (e.cams.length + e.radars.length >= 3) list.push({ road, slug: slug(road), cams: e.cams.length, radars: e.radars.length, stretches: e.stretches.length });
+  const order = (r: string) => { const m = /^([A-Z]+)-?(\d+)/.exec(r); return m ? [roadGroup(r), ['AP', 'A', 'N', 'E'].indexOf(m[1]!) + 1 || 9, m[1]!, Number(m[2])] as const : [3, 9, r, 0] as const; };
+  list.sort((a, b) => { const x = order(a.road); const y = order(b.road); return x[0] - y[0] || x[1] - y[1] || x[2].localeCompare(y[2]) || x[3] - y[3]; });
+  const km = (v: unknown) => (v == null || v === '' ? '—' : `km ${Number(v).toLocaleString('es-ES', { maximumFractionDigits: 1 })}`);
+  for (const [i, r] of list.entries()) {
+    const { road, slug: s } = r;
+    const e = roads.get(road)!;
+    const provSeen = new Map<string, string>();
+    for (const f of [...e.cams, ...e.radars]) {
+      const n = provName(String(f.properties.prov ?? ''));
+      const k = slug(n.split('/')[0]!);
+      if (n && !provSeen.has(k)) provSeen.set(k, n);
+    }
+    const provs = [...provSeen.values()].slice(0, 8);
     const fijos = e.radars.filter((f) => f.properties.kind === 'fijo').sort((a, b) => kmOf(a) - kmOf(b));
     const tramos = e.radars.filter((f) => f.properties.kind === 'tramo').sort((a, b) => kmOf(a) - kmOf(b));
+    const others = e.radars.filter((f) => !['fijo', 'tramo'].includes(String(f.properties.kind)));
     const cams = [...e.cams].sort((a, b) => kmOf(a) - kmOf(b));
-    const km = (v: unknown) => (v == null ? '' : `km ${Number(v).toLocaleString('es-ES', { maximumFractionDigits: 1 })}`);
-    const body = `<header class="page-hero"><p class="eyebrow">Carretera</p><h1>${esc(road)} en directo</h1>
-<p class="lede">Estado ahora, ${e.cams.length} cámaras de la DGT${e.radars.length ? `, ${e.radars.length} radares` : ''}${e.stretches.length ? ` y ${e.stretches.length} tramos de vigilancia` : ''}${provs.length ? ` a su paso por ${esc(provs.join(', '))}` : ''}.</p>
-<p><a class="btn" href="/?carretera=${encodeURIComponent(road)}&capas=traffic,cameras,radars">Ver la ${esc(road)} en el mapa</a></p></header>
+    const hist = history.get(road);
+    const histLine = hist ? (['accidente', 'retencion', 'obras', 'cerrada'] as const).filter((c) => Number(hist[c] ?? 0) > 0)
+      .map((c) => plural(Number(hist[c]), { accidente: 'accidente', retencion: 'retención', obras: 'aviso de obras', cerrada: 'corte' }[c], { accidente: 'accidentes', retencion: 'retenciones', obras: 'avisos de obras', cerrada: 'cortes' }[c])).join(' · ') : '';
+    const near = [...list.slice(Math.max(0, i - 4), i), ...list.slice(i + 1, i + 5)];
+    const radarRow = (kind: string, f: F) => `<tr><td><span class="kind-dot ${kind === 'Fijo' ? 'fixed' : kind.startsWith('Tramo') ? 'section' : 'other'}"></span>${esc(kind)}</td><td>${esc(km(f.properties.km))}${f.properties.km2 != null ? ` – ${esc(km(f.properties.km2).replace('km ', ''))}` : ''}</td><td>${f.properties.maxspeed ? `${esc(f.properties.maxspeed)} km/h` : '<span class="muted">—</span>'}</td><td>${esc(provName(String(f.properties.prov ?? ''))) || '<span class="muted">—</span>'}</td></tr>`;
+    const KIND: Record<string, string> = { semaforo: 'Semáforo', cinturon: 'Cinturón', linea: 'Línea continua', stop: 'Stop' };
+    const body = `<header class="page-hero"><p class="eyebrow"><a href="/carreteras/">Carreteras</a></p><h1><span class="road-shield ${shield(road)}">${esc(road)}</span> en directo</h1>
+<p class="lede">Lo que pasa ahora en la ${esc(road)}${provs.length ? ` a su paso por ${esc(provs.join(', '))}` : ''}: avisos de la DGT, sus cámaras en directo y dónde están los radares.</p>
+<div class="hero-actions"><a class="btn" href="/?carretera=${encodeURIComponent(road)}&capas=traffic,cameras,radars">Ver la ${esc(road)} en el mapa</a>${cams.length ? '<a class="btn ghost" href="#camaras">Ver las cámaras</a>' : ''}</div></header>
+<section class="stat-row">
+<div class="stat"><b id="road-now">…</b><span>avisos ahora</span></div>
+<div class="stat"><b>${e.cams.length}</b><span>${e.cams.length === 1 ? 'cámara en directo' : 'cámaras en directo'}</span></div>
+<div class="stat"><b>${e.radars.length}</b><span>${e.radars.length === 1 ? 'radar' : 'radares'}${tramos.length ? `, ${plural(tramos.length, 'de tramo', 'de tramo')}` : ''}</span></div>
+${hist ? `<div class="stat"><b>${Number(hist.total).toLocaleString('es-ES', { useGrouping: 'always' } as unknown as Intl.NumberFormatOptions)}</b><span>avisos desde el ${esc(since)}</span></div>` : `<div class="stat"><b>${e.stretches.length}</b><span>tramos de vigilancia</span></div>`}
+</section>
 <section class="card" id="road-live" data-road="${esc(road)}"><h2>Ahora en la ${esc(road)}</h2><p class="muted">Cargando avisos…</p></section>
-${cams.length ? `<section class="card"><h2>Cámaras (${cams.length})</h2><div class="cam-grid" data-road="${esc(road)}">${cams.slice(0, 60).map((f) => `<figure data-cam="${esc(f.properties.id)}"><img loading="lazy" alt="Cámara de la ${esc(road)} ${esc(km(f.properties.km))}" src="/cam/${esc(f.properties.id)}.jpg"><figcaption>${esc(km(f.properties.km))}${f.properties.dest ? ` · hacia ${esc(f.properties.dest)}` : ''}</figcaption></figure>`).join('')}</div></section>` : ''}
-${fijos.length || tramos.length ? `<section class="card"><h2>Radares</h2><table class="plain"><thead><tr><th>Tipo</th><th>Situación</th><th>Provincia</th></tr></thead><tbody>
-${[...fijos.map((f) => `<tr><td>Fijo</td><td>${esc(km(f.properties.km))}</td><td>${esc(provName(String(f.properties.prov ?? '')))}</td></tr>`), ...tramos.map((f) => `<tr><td>Tramo${f.properties.len ? ` (${esc(String(f.properties.len).replace('.', ','))} km)` : ''}</td><td>${esc(km(f.properties.km))}${f.properties.km2 != null ? ` a ${esc(km(f.properties.km2))}` : ''}</td><td>${esc(provName(String(f.properties.prov ?? '')))}</td></tr>`)].join('')}
-</tbody></table><p class="muted small">Ubicaciones oficiales de la DGT, del Servei Català de Trànsit o del Ayuntamiento de Madrid, y de OpenStreetMap donde no hay lista oficial. No incluye radares móviles.</p></section>` : ''}
-${e.stretches.length ? `<section class="card"><h2>Tramos de vigilancia intensificada (INVIVE)</h2><p>${e.stretches.sort((a, b) => kmOf(a) - kmOf(b)).map((f) => `<span class="chip">${esc(km(f.properties.km))}${f.properties.km2 != null ? ` – ${esc(String(f.properties.km2).replace('.', ','))}` : ''}</span>`).join(' ')}</p></section>` : ''}`;
+${histLine ? `<p class="muted small history-line">Desde el ${esc(since)}: ${esc(histLine)}.</p>` : ''}
+${cams.length ? `<section class="card" id="camaras"><div class="card-head"><h2>Cámaras</h2><span class="muted small">Se actualizan solas cada 2 minutos</span></div><div class="cam-grid${cams.length > 12 ? ' folded' : ''}" data-road="${esc(road)}">${cams.map((f) => `<figure data-cam="${esc(f.properties.id)}"><img loading="lazy" alt="Cámara de la ${esc(road)} ${esc(km(f.properties.km))}" src="/cam/${esc(f.properties.id)}.jpg"><figcaption><b>${esc(km(f.properties.km))}</b>${f.properties.dest ? ` · hacia ${esc(titleish(String(f.properties.dest)))}` : ''}</figcaption></figure>`).join('')}</div>${cams.length > 12 ? `<button class="btn ghost more-btn" type="button" data-unfold>Ver las ${cams.length} cámaras</button>` : ''}</section>` : ''}
+${e.radars.length ? `<section class="card"><h2>Radares</h2><div class="table-wrap${e.radars.length > 14 ? ' tall' : ''}"><table class="plain"><thead><tr><th>Tipo</th><th>Situación</th><th>Límite</th><th>Provincia</th></tr></thead><tbody>
+${[...fijos.map((f) => radarRow('Fijo', f)), ...tramos.map((f) => radarRow(`Tramo${f.properties.len ? ` de ${String(f.properties.len).replace('.', ',')} km` : ''}`, f)), ...others.map((f) => radarRow(KIND[String(f.properties.kind)] ?? 'Otro', f))].join('')}
+</tbody></table></div><p class="muted small">Ubicaciones oficiales de la DGT, del Servei Català de Trànsit o del Ayuntamiento de Madrid, y de OpenStreetMap donde no hay lista oficial. No incluye radares móviles: en el mapa, la capa <a href="/?capas=mobile">Controles móviles</a> muestra los que anuncian ahora los paneles.</p></section>` : ''}
+${e.stretches.length ? `<section class="card"><h2>Tramos de vigilancia intensificada (INVIVE)</h2><p class="muted small">Tramos donde la DGT concentra controles de velocidad, alcohol y distracciones.</p><p>${e.stretches.sort((a, b) => kmOf(a) - kmOf(b)).map((f) => `<span class="chip">${esc(km(f.properties.km))}${f.properties.km2 != null ? ` – ${esc(String(f.properties.km2).replace('.', ','))}` : ''}</span>`).join(' ')}</p></section>` : ''}
+${near.length ? `<section class="card"><h2>Otras carreteras</h2><div class="road-links">${near.map((n) => `<a href="/carretera/${n.slug}/"><span class="road-shield small ${shield(n.road)}">${esc(n.road)}</span></a>`).join('')}<a class="all" href="/carreteras/">Todas las carreteras</a></div></section>` : ''}`;
     pages.push({
       path: `/carretera/${s}/`, kind: 'road', title: `${road} hoy: estado, cámaras y radares en directo · Ruta viva`,
-      description: `Estado de la ${road} ahora mismo: accidentes, obras y cortes, ${e.cams.length} cámaras de la DGT en directo${e.radars.length ? ` y ${e.radars.length} radares` : ''}.`, body,
+      description: `Estado de la ${road} ahora mismo: accidentes, obras y cortes, ${plural(e.cams.length, 'cámara', 'cámaras')} de la DGT en directo${e.radars.length ? ` y ${plural(e.radars.length, 'radar', 'radares')}` : ''}.`, body,
       jsonld: { '@context': 'https://schema.org', '@type': 'WebPage', name: `${road} en directo`, url: `${SITE}/carretera/${s}/`, isPartOf: { '@type': 'WebSite', name: 'Ruta viva', url: SITE } },
     });
   }
-  const order = (r: string) => { const m = /^([A-Z]+)-?(\d+)/.exec(r); return m ? [['AP', 'A', 'N', 'E'].indexOf(m[1]!) + 1 || 9, m[1]!, Number(m[2])] as const : [9, r, 0] as const; };
-  list.sort((a, b) => { const x = order(a.road); const y = order(b.road); return x[0] - y[0] || x[1].localeCompare(y[1]) || x[2] - y[2]; });
+  const card = (r: (typeof list)[number]) => `<a href="/carretera/${r.slug}/" data-road="${esc(r.road)}"><span class="road-shield ${shield(r.road)}">${esc(r.road)}</span><small>${[r.cams ? plural(r.cams, 'cámara', 'cámaras') : '', r.radars ? plural(r.radars, 'radar', 'radares') : ''].filter(Boolean).join(' · ')}</small><i class="live-n" hidden></i></a>`;
+  const groups = GROUPS.map((title, g) => ({ title, items: list.filter((r) => roadGroup(r.road) === g) })).filter((g) => g.items.length);
   pages.push({
     path: '/carreteras/', kind: 'roads', title: 'Carreteras de España: estado, cámaras y radares · Ruta viva',
     description: `Estado en directo, cámaras de la DGT y radares de ${list.length} carreteras de España, de la A-1 a la última nacional.`,
-    body: `<header class="page-hero"><p class="eyebrow">Carreteras</p><h1>Cada carretera, en directo</h1><p class="lede">${list.length} carreteras con cámaras o radares de la DGT. Elige una para ver su estado, sus cámaras y sus radares.</p>
+    body: `<header class="page-hero"><p class="eyebrow">Carreteras</p><h1>Cada carretera, en directo</h1><p class="lede">${list.length} carreteras con cámaras o radares. Elige una para ver sus avisos de ahora, sus cámaras y sus radares.</p>
 <label class="filter"><span class="sr-only">Filtrar carreteras</span><input id="road-filter" type="search" placeholder="Filtra: A-6, N-340, AP-7…" autocomplete="off"></label></header>
-<section class="road-list">${list.map((r) => `<a href="/carretera/${r.slug}/" data-road="${esc(r.road)}"><b>${esc(r.road)}</b><small>${r.cams} cámaras${r.radars ? ` · ${r.radars} radares` : ''}</small></a>`).join('')}</section>`,
+<section class="card" id="roads-now" hidden><div class="card-head"><h2>Con más avisos ahora</h2><span class="muted small" id="roads-now-note"></span></div><div class="now-list"></div></section>
+${groups.map((g) => `<section class="road-group"><h2>${esc(g.title)} <span class="muted">${g.items.length}</span></h2><div class="road-list">${g.items.map(card).join('')}</div></section>`).join('\n')}`,
   });
   return pages;
+}
+
+/** "MADRID" -> "Madrid" for camera destinations written in capitals. */
+function titleish(s: string): string {
+  return s === s.toUpperCase() ? s.toLowerCase().replace(/(^|[\s/(-])(\p{L})/gu, (_, a: string, b: string) => a + b.toUpperCase()) : s;
 }
 
 // ---------------------------------------------------------------- write

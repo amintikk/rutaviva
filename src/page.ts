@@ -2,10 +2,10 @@
 import '@fontsource-variable/inter';
 import './styles/tokens.css';
 import './styles/pages.css';
-import { ago, CATS, esc, km, live, nf, price, titleCase, type Cat, type FC, type Incident, type Zone } from './data.ts';
+import { ago, CATS, esc, km, live, nf, price, titleCase, V16_COLOR, type Cat, type FC, type Incident, type Zone } from './data.ts';
 import { bars, lineChart } from './ui/chart.ts';
 import { initConsent } from './ui/consent.ts';
-import { icon, iconSvg } from './ui/icons.ts';
+import { icon, iconSvg, type IconName } from './ui/icons.ts';
 import { isDark, setTheme } from './ui/theme.ts';
 
 const main = document.querySelector<HTMLElement>('main')!;
@@ -93,15 +93,57 @@ async function fuelPage(): Promise<void> {
 
 // ---------------------------------------------------------------- recarga
 
+interface EvSummary { generated: string; stations: number; points: number; fast: number; h24: number; bands: { band: string; stations: number; points: number }[]; provinces: { prov: string; stations: number; points: number; fast: number }[]; operators: { op: string; stations: number; points: number; fast: number }[]; conns: [string, number][] }
+
+/** "IBERDROLA CLIENTES S.A.U" -> "Iberdrola Clientes". */
+function opName(s: string): string {
+  const t = s.replace(/[,.]?\s*\b(S\.?\s?L\.?\s?U?\.?|S\.?\s?A\.?\s?U?\.?|SLU|SAU|SL|SA|SRL)\.?$/i, '').replace(/[,\s]+$/, '').trim();
+  return t === t.toUpperCase() ? titleCase(t) : t;
+}
+/** "Balears, Illes" -> "Illes Balears". */
+const provLabel = (p: string) => { const m = /^(.*?),\s*(.+)$/.exec(p); return titleCase(m ? `${m[2]} ${m[1]}` : p); };
+const fold = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+async function evNetwork(): Promise<void> {
+  let s: EvSummary;
+  try {
+    s = await live<EvSummary>('ev-summary', 3600);
+  } catch {
+    $('#ev-net')!.innerHTML = '<p class="muted">No se pudo cargar la red de recarga.</p>';
+    return;
+  }
+  const share = (a: number, b: number) => `${Math.round((a / b) * 100)} %`;
+  $('#ev-net')!.innerHTML = `<div class="stat"><b>${nf.format(s.stations)}</b><span>estaciones públicas</span></div>
+    <div class="stat"><b>${nf.format(s.points)}</b><span>puntos de recarga</span></div>
+    <div class="stat"><b style="color:#0a84ff">${nf.format(s.fast)}</b><span>rápidas, de 50 kW o más (${share(s.fast, s.stations)})</span></div>
+    <div class="stat"><b style="color:#1fa34a">${nf.format(s.h24)}</b><span>abiertas las 24 horas</span></div>`;
+  const bandColor = ['#5e5ce6', '#0a84ff', '#30b0c7', '#8e8e93'];
+  const BAND = ['150 kW o más', '50 a 149 kW', '22 a 49 kW', 'Menos de 22 kW'];
+  $('#ev-bands')!.replaceChildren(bars(s.bands.map((b, i) => ({ label: BAND[i] ?? b.band, value: b.stations, note: ` · ${nf.format(b.points)} puntos`, color: bandColor[i] })), (v) => nf.format(v), { min: 0 }));
+  const total = s.conns.reduce((a, [, n]) => a + n, 0);
+  $('#ev-conns')!.replaceChildren(bars(s.conns.slice(0, 6).map(([c, n]) => ({ label: c, value: n, note: ` · ${share(n, total)}`, color: '#34c759' })), (v) => nf.format(v), { min: 0 }));
+  $('#ev-opsnet')!.replaceChildren(bars(s.operators.slice(0, 12).map((o) => ({ label: opName(o.op), value: o.points, note: ` · ${nf.format(o.fast)} rápidas`, color: '#0a84ff' })), (v) => `${nf.format(v)} puntos`, { min: 0 }));
+  const rows = s.provinces.map((p) => `<tr data-prov="${esc(fold(provLabel(p.prov)))}"><td>${esc(provLabel(p.prov))}</td><td>${nf.format(p.stations)}</td><td>${nf.format(p.points)}</td><td>${nf.format(p.fast)}</td></tr>`);
+  $('#ev-provs')!.innerHTML = `<div class="table-wrap tall"><table class="plain"><thead><tr><th>Provincia</th><th>Estaciones</th><th>Puntos</th><th>Rápidas</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>
+    <p class="muted small">Datos del Punto de Acceso Nacional (MITERD), actualizados ${esc(ago(s.generated))}.</p>`;
+  const f = document.querySelector<HTMLInputElement>('#ev-prov-filter');
+  f?.addEventListener('input', () => {
+    const q = fold(f.value.trim());
+    document.querySelectorAll<HTMLElement>('#ev-provs tr[data-prov]').forEach((tr) => { tr.hidden = !!q && !tr.dataset.prov!.includes(q); });
+  });
+}
+
 interface Ranking { day: string; total: number; broken: number; available: number; busy: number; operators: { name: string; n: number; broken: number; free: number; busy: number }[]; prices: { band: string; n: number; p25: number; median: number; p75: number }[]; history: [string, number, number][] }
 
 async function evPage(): Promise<void> {
+  void evNetwork();
   let r: Ranking;
   try {
     r = await live<Ranking>('ev-ranking', 3600);
     if (!r.total) throw new Error();
   } catch {
-    $('#ev-stats')!.innerHTML = '<p class="muted">El primer recorrido completo de los cargadores se hace esta noche. Vuelve mañana para ver el ranking.</p>';
+    $('#ev-stats')!.outerHTML = `<section class="card soon">${iconSvg('clock', 22)}<div><h3>Todavía no tenemos el primer recorrido completo</h3><p class="muted">El estado de cada punto (libre, en uso o averiado) y su precio llegan de REVE, el mapa oficial de Red Eléctrica. En cuanto termine el primer recorrido nocturno aparecerán aquí el porcentaje de puntos averiados, los operadores con más averías y lo que cuesta cargar.</p></div></section>`;
+    document.querySelectorAll('.ev-extra').forEach((el) => el.remove());
     return;
   }
   const pct = (a: number, b: number) => `${((a / b) * 100).toLocaleString('es-ES', { maximumFractionDigits: 1 })} %`;
@@ -159,43 +201,105 @@ async function zbePage(): Promise<void> {
 
 // ---------------------------------------------------------------- roads
 
+const normRoad = (r: unknown) => String(r ?? '').toUpperCase().replace(/\s+/g, '').replace(/^([A-Z]+)(\d)/, '$1-$2');
+type Look = { label: string; plural: string; color: string; icon: IconName; rank: number };
+/** Category of an incident, or a V16 beacon (a stopped vehicle that switched one on). */
+const look = (p: Incident): Look => (p.v16 ? { label: 'Baliza V16 activada', plural: 'Balizas V16', color: V16_COLOR, icon: 'siren', rank: 5 } : CATS[p.cat as Cat] ?? CATS.otro);
+function tally(list: Incident[]): { n: number; l: Look }[] {
+  const m = new Map<string, { n: number; l: Look }>();
+  for (const p of list) {
+    const l = look(p);
+    const c = m.get(l.label) ?? { n: 0, l };
+    c.n++;
+    m.set(l.label, c);
+  }
+  return [...m.values()].sort((a, b) => a.l.rank - b.l.rank);
+}
+
 async function roadPage(): Promise<void> {
   const box = $('#road-live');
   const road = box?.dataset.road;
   if (box && road) {
+    const now = $('#road-now');
     try {
       const fc = await live<FC<Incident>>('incidents', 60);
-      const list = fc.features.filter((f) => String(f.properties.road ?? '').toUpperCase().replace(/\s+/g, '') === road).sort((a, b) => CATS[a.properties.cat].rank - CATS[b.properties.cat].rank);
-      const rows = list.map((f) => {
+      const list = fc.features.filter((f) => normRoad(f.properties.road) === road)
+        .sort((a, b) => look(a.properties).rank - look(b.properties).rank || String(b.properties.start ?? '').localeCompare(String(a.properties.start ?? '')));
+      if (now) now.textContent = nf.format(list.length);
+      const summary = tally(list.map((f) => f.properties)).map(({ n, l }) => `<span class="cat-pill" style="--c:${l.color}">${iconSvg(l.icon, 14)}<b>${n}</b> ${esc(n === 1 ? l.label : l.plural)}</span>`).join('');
+      const rows = list.map((f, i) => {
         const p = f.properties;
-        const c = CATS[p.cat as Cat] ?? CATS.otro;
-        return `<li><span class="mini-badge" style="--c:${c.color}">${iconSvg(c.icon, 15, '#fff', 2.2)}</span><span><b>${esc(c.label)}</b> ${p.km != null ? `<span class="muted">${esc(km(p.km))}</span>` : ''}<br><small>${esc(titleCase(p.muni) || titleCase(p.prov))} · ${esc(ago(p.start))}</small></span></li>`;
+        const l = look(p);
+        const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+        return `<li${i >= 8 ? ' class="extra"' : ''}><span class="mini-badge" style="--c:${l.color}">${iconSvg(l.icon, 15, '#fff', 2.2)}</span><span class="grow"><b>${esc(l.label)}</b> ${p.km != null ? `<span class="muted">${esc(km(p.km))}</span>` : ''}<br><small>${esc(titleCase(p.muni) || titleCase(p.prov))} · ${esc(ago(p.start))}</small></span><a class="go" href="/?ver=incident:${encodeURIComponent(p.id)}#mapa=13/${lat.toFixed(5)}/${lon.toFixed(5)}" aria-label="Ver en el mapa">${iconSvg('chevronRight', 18)}</a></li>`;
       });
-      box.innerHTML = `<h2>Ahora en la ${esc(road)}</h2>${rows.length ? `<ul class="inc-list">${rows.join('')}</ul>` : `<p class="ok-msg">${iconSvg('dot', 18)} Sin avisos publicados ahora mismo.</p>`}<p class="muted small">Actualizado ${esc(ago(fc.generated))}.</p>`;
+      box.innerHTML = `<div class="card-head"><h2>Ahora en la ${esc(road)}</h2><span class="muted small">Actualizado ${esc(ago(fc.generated))}</span></div>
+        ${rows.length ? `<div class="cat-pills">${summary}</div><ul class="inc-list${rows.length > 8 ? ' folded' : ''}">${rows.join('')}</ul>${rows.length > 8 ? `<button class="btn ghost more-btn" type="button" data-unfold>Ver los ${rows.length} avisos</button>` : ''}`
+          : `<p class="ok-msg">${iconSvg('check', 18)} Sin avisos publicados ahora mismo.</p>`}`;
     } catch {
+      if (now) now.textContent = '—';
       box.innerHTML = `<h2>Ahora en la ${esc(road)}</h2><p class="muted">No se pudo cargar el estado.</p>`;
     }
   }
-  // Refresh camera images every 2 minutes while the page is open.
+  // Refresh the visible camera images every 2 minutes while the page is open.
   setInterval(() => {
     document.querySelectorAll<HTMLImageElement>('.cam-grid img').forEach((img) => {
       const r = img.getBoundingClientRect();
-      if (r.bottom > 0 && r.top < innerHeight) img.src = img.src.replace(/(\?t=\d+)?$/, `?t=${Date.now()}`);
+      if (r.height && r.bottom > 0 && r.top < innerHeight) img.src = img.src.replace(/(\?t=\d+)?$/, `?t=${Date.now()}`);
     });
   }, 120000);
   document.querySelectorAll<HTMLImageElement>('.cam-grid img').forEach((img) => img.addEventListener('error', () => img.closest('figure')?.classList.add('off')));
 }
 
-function roadsPage(): void {
+// "Ver todos": a folded list or grid opens in place.
+document.addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-unfold]');
+  if (!b) return;
+  b.previousElementSibling?.classList.remove('folded');
+  b.remove();
+});
+
+async function roadsPage(): Promise<void> {
   const input = document.querySelector<HTMLInputElement>('#road-filter');
+  const cards = [...document.querySelectorAll<HTMLAnchorElement>('.road-list a')];
   input?.addEventListener('input', () => {
-    const q = input.value.toUpperCase().replace(/\s+/g, '');
-    document.querySelectorAll<HTMLElement>('.road-list a').forEach((a) => { a.hidden = !!q && !a.dataset.road!.replace('-', '').includes(q.replace('-', '')); });
+    const q = normRoad(input.value).replace(/-/g, '');
+    for (const a of cards) a.hidden = !!q && !a.dataset.road!.replace(/-/g, '').includes(q);
+    document.querySelectorAll<HTMLElement>('.road-group').forEach((g) => { g.hidden = !g.querySelector('a:not([hidden])'); });
   });
+  try {
+    const fc = await live<FC<Incident>>('incidents', 120);
+    const by = new Map<string, Incident[]>();
+    for (const f of fc.features) {
+      const r = normRoad(f.properties.road);
+      by.set(r, [...(by.get(r) ?? []), f.properties]);
+    }
+    // Serious ones first: accidents, cuts, queues and snow count more than roadworks.
+    const serious = (l: Incident[]) => l.filter((p) => ['accidente', 'cerrada', 'retencion', 'nieve'].includes(p.cat)).length;
+    for (const a of cards) {
+      const l = by.get(a.dataset.road!) ?? [];
+      if (!l.length) continue;
+      const i = a.querySelector<HTMLElement>('.live-n')!;
+      i.hidden = false;
+      i.textContent = `${l.length} ${l.length === 1 ? 'aviso' : 'avisos'}`;
+      i.classList.toggle('hot', serious(l) > 0);
+    }
+    const known = new Set(cards.map((a) => a.dataset.road!));
+    const top = [...by.entries()].filter(([r]) => known.has(r)).map(([r, l]) => ({ r, l, s: serious(l) })).sort((a, b) => b.s - a.s || b.l.length - a.l.length).slice(0, 6);
+    const box = $('#roads-now');
+    if (box && top.length) {
+      box.hidden = false;
+      $('#roads-now-note')!.textContent = `Actualizado ${ago(fc.generated)}`;
+      box.querySelector('.now-list')!.innerHTML = top.map(({ r, l }) => {
+        const a = cards.find((c) => c.dataset.road === r)!;
+        return `<a href="${a.getAttribute('href')}"><span class="now-top">${a.querySelector('.road-shield')!.outerHTML}<span class="muted small">${l.length} ${l.length === 1 ? 'aviso' : 'avisos'}</span></span><span class="cat-pills">${tally(l).slice(0, 4).map(({ n, l: k }) => `<span class="cat-pill" title="${esc(n === 1 ? k.label : k.plural)}" style="--c:${k.color}">${iconSvg(k.icon, 13)}<b>${n}</b></span>`).join('')}</span></a>`;
+      }).join('');
+    }
+  } catch { /* the list works without the live counts */ }
 }
 
 if (kind === 'fuel') void fuelPage();
 else if (kind === 'ev') void evPage();
 else if (kind === 'zbe') void zbePage();
 else if (kind === 'road') void roadPage();
-else if (kind === 'roads') roadsPage();
+else if (kind === 'roads') void roadsPage();
